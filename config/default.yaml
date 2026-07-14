@@ -1,0 +1,38 @@
+# Default runtime configuration for pkb-agent.
+# Values here are overrides/defaults; environment variables take precedence
+# (see src/pkb_agent/app/settings.py).
+
+agent:
+  max_steps: 12
+  tool_result_max_chars: 6000
+  temperature: 0.2
+  # Hard ceiling on a single tool result before truncation kicks in.
+
+rag:
+  top_k: 6
+  rrf_k: 60
+  chunk_size: 800        # target characters per chunk
+  chunk_overlap: 120     # overlap between adjacent chunks
+  min_query_len: 2
+  # Hybrid weights: vector similarity vs full-text search contribution.
+  vector_weight: 0.6
+  fts_weight: 0.4
+
+embedding:
+  batch_size: 64
+  timeout: 60
+
+web:
+  search_provider: tavily
+  fetch_timeout: 20
+  max_results: 5
+  fetch_max_chars: 8000
+
+memory:
+  max_results: 5
+  # Short-term: per run; long-term: cross-run persistent notes.
+  default_scope: short
+
+trace:
+  enabled: true
+  redact_secrets: true

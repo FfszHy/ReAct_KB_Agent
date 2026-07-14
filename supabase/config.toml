@@ -1,0 +1,25 @@
+# Supabase project config (used by the Supabase CLI: `supabase db push`, etc.).
+# Adjust project_id / api keys to match your Supabase project.
+
+project_id = "pkb-agent"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public"]
+extra_search_path = ["public"]
+
+[db]
+port = 54321
+shadow_port = 54320
+major_version = 15
+
+[db.vector]
+# Ensures the pgvector extension is available in the local/linked DB.
+enabled = true
+
+[studio]
+enabled = true
+port = 54323
+
+# Apply all migrations under supabase/migrations on `supabase db push`.

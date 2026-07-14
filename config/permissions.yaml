@@ -1,0 +1,45 @@
+# Tool permission policy.
+# allow:  always permitted
+# ask:    require interactive confirmation before execution
+# deny:   never permitted
+#
+# Permissions can be scoped per tool name. Argument-level constraints may be
+# expressed under `constraints` (validated by the permission manager).
+
+tools:
+  now:
+    permission: allow
+  calculator:
+    permission: allow
+  rag_search:
+    permission: allow
+    constraints:
+      max_top_k: 20
+  rag_read:
+    permission: allow
+  memory_search:
+    permission: allow
+  memory_write:
+    permission: ask
+    constraints:
+      max_content_chars: 4000
+  web_search:
+    permission: allow
+    constraints:
+      max_results: 10
+  web_fetch:
+    permission: ask
+    constraints:
+      allowed_schemes: [https, http]
+      block_private_hosts: true
+      max_fetch_chars: 8000
+
+# Globally dangerous patterns are always denied regardless of tool.
+denylist:
+  # e.g. internal metadata endpoints, link-local addresses handled by url_safety.
+  blocked_hosts:
+    - localhost
+    - 127.0.0.1
+    - 169.254.169.254
+    - 0.0.0.0
+    - "[::1]"
