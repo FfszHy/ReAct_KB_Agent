@@ -19,6 +19,26 @@ def _normalize(text: str) -> str:
     return "\n".join(line.strip() for line in text.splitlines()).strip()
 
 
+def _extract_pdf_text(path: Path) -> str:
+    """Extract plain text from a PDF file using pypdf."""
+    from pypdf import PdfReader
+
+    reader = PdfReader(str(path))
+    parts: list[str] = []
+    for page in reader.pages:
+        text = page.extract_text() or ""
+        if text.strip():
+            parts.append(text)
+    return "\n\n".join(parts)
+
+
+def read_file_text(path: Path) -> str:
+    """Read text content from a file, dispatching by extension."""
+    if path.suffix.lower() == ".pdf":
+        return _extract_pdf_text(path)
+    return path.read_text("utf-8")
+
+
 def _content_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
@@ -145,8 +165,9 @@ class IngestionPipeline:
 
     async def ingest_file(self, path: str | Path, **kwargs: Any) -> dict[str, Any]:
         p = Path(path)
-        text = await asyncio.to_thread(p.read_text, "utf-8")
-        kwargs.setdefault("title", p.stem)
+        text = await asyncio.to_thread(read_file_text, p)
+        if not kwargs.get("title"):
+            kwargs["title"] = p.stem
         kwargs.setdefault("source_uri", str(p))
         kwargs.setdefault("source_type", "file")
         return await self.ingest_text(text, **kwargs)

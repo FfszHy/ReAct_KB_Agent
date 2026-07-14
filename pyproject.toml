@@ -25,6 +25,7 @@ dependencies = [
   "tiktoken>=0.7",
   "PyYAML>=6.0",
   "python-dotenv>=1.0",
+  "pypdf>=4.0",
 ]
 
 [project.optional-dependencies]

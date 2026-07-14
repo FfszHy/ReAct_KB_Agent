@@ -208,7 +208,7 @@ def _render_event(event: dict[str, Any]) -> None:
 
 
 def _collect_files(path: Path, recursive: bool) -> list[Path]:
-    text_suffixes = {".txt", ".md", ".markdown", ".rst", ".py", ".js", ".ts", ".json", ".yaml", ".yml", ".csv", ".html", ".org"}
+    text_suffixes = {".txt", ".md", ".markdown", ".rst", ".py", ".js", ".ts", ".json", ".yaml", ".yml", ".csv", ".html", ".org", ".pdf"}
     if path.is_file():
         return [path]
     if not path.is_dir():
