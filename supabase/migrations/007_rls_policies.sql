@@ -13,7 +13,7 @@ returns text
 language sql
 stable
 as $$
-    coalesce(nullif(current_setting('request.jwt.claims', true)::jsonb->>'sub', ''), 'default');
+    select coalesce(nullif(current_setting('request.jwt.claims', true)::jsonb->>'sub', ''), 'default');
 $$;
 
 -- ---- documents ----
