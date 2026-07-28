@@ -31,7 +31,23 @@ web:
 memory:
   max_results: 5
   # Short-term: per run; long-term: cross-run persistent notes.
-  default_scope: short
+  default_scope: long
+  max_content_chars: 4000
+  # Secret-looking content is rejected before it can be persisted.
+  reject_secrets: true
+
+prompts:
+  # Set to an absolute path only when replacing the bundled prompt manifest.
+  manifest_path: ""
+  query_rewrite:
+    enabled: true
+    max_queries: 3
+
+permissions:
+  # A row in tool_permissions replaces the same tool's YAML rule.
+  db_overrides_enabled: true
+  # 0 refreshes before every tool call; raise this to reduce DB reads in long-lived runtimes.
+  refresh_seconds: 0
 
 trace:
   enabled: true

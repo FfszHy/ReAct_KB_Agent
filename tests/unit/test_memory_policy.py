@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from pkb_agent.app.settings import Settings
 from pkb_agent.memory.policy import (
     ALLOWED_KINDS,
     ALLOWED_SCOPES,
@@ -122,4 +123,30 @@ def test_from_settings_returns_policy():
     policy = MemoryPolicy.from_settings(None)  # type: ignore[arg-type]
     assert isinstance(policy, MemoryPolicy)
     ok, _ = policy.validate(content="x")
+    assert ok is True
+
+
+def test_from_settings_uses_memory_limits_and_default_scope():
+    settings = Settings(
+        memory_default_scope="short",
+        memory_max_content_chars=10,
+        memory_reject_secrets=True,
+    )
+    policy = MemoryPolicy.from_settings(settings)
+
+    assert policy.default_scope() == "short"
+    ok, reason = policy.validate(content="x" * 11)
+    assert ok is False
+    assert "max length" in reason
+
+
+def test_secret_looking_content_is_rejected_unless_policy_disables_guard():
+    content = "api_key=super-secret-value"
+
+    ok, reason = MemoryPolicy().validate(content=content)
+    assert ok is False
+    assert "secret" in reason
+
+    permissive = MemoryPolicy(MemoryPolicyConfig(reject_secrets=False))
+    ok, _ = permissive.validate(content=content)
     assert ok is True

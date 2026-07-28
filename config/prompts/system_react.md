@@ -31,7 +31,8 @@ For every step:
 
 1. **Thought** — reason about what you know, what you still need, and which tool
    to call next and why. Keep it concise.
-2. **Action** — emit exactly one tool call conforming to the provided schema.
+2. **Action** — emit one tool call, or several independent tool calls, conforming
+   to the provided schema.
 3. **Observation** — the runtime returns the tool result; incorporate it.
 
 Stop calling tools when you either:

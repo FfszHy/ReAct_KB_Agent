@@ -37,6 +37,33 @@ memory directly. It can only call tools. Each tool call passes through:
 parameter validation → permission check → trace recording → execution → result
 truncation → error wrapping.
 
+### Prompt lifecycle
+
+Prompt bodies live in `config/prompts/*.md`; their runtime lifecycle is declared
+in `config/prompts/manifest.yaml` rather than inferred from filenames.
+
+- `system_react` is included once per run.
+- `memory_policy` is included only when `memory_write` is registered; secrets
+  are additionally rejected by the code-side memory policy.
+- `query_rewrite` runs only immediately before `rag_search` or `web_search`.
+  It returns focused query variants, falls back to the original query on failure,
+  and records the prompt hash plus original/effective tool arguments in traces.
+
+Set `prompts.query_rewrite.enabled: false` in `config/default.yaml` to avoid
+the extra planning model call. Prompt and rewrite provenance requires migration
+`008_prompt_trace.sql` in addition to the earlier Supabase migrations.
+
+### Dynamic tool permissions
+
+`config/permissions.yaml` is the baseline policy. A row in the global
+`tool_permissions` table replaces the complete rule (`permission` and
+`constraints`) for that exact tool; no row means the YAML rule remains active.
+By default the runtime refreshes this table before every tool call, so a policy
+edit applies during a long-lived run. Configure `permissions.refresh_seconds`
+to trade freshness for fewer reads, or set `permissions.db_overrides_enabled`
+to `false` for YAML-only operation. If the table cannot be read, the runtime
+clears dynamic rules and safely falls back to YAML.
+
 ## Project layout
 
 See the spec tree under `src/pkb_agent/`. Highlights:

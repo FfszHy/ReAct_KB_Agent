@@ -28,6 +28,8 @@ from pkb_agent.app.settings import Settings, get_settings, load_prompt, permissi
 from pkb_agent.llm.deepseek_client import DeepSeekClient
 from pkb_agent.llm.schemas import Message, ToolCall
 from pkb_agent.memory.manager import MemoryManager
+from pkb_agent.prompts import PromptComposer, PromptComposition, PromptRegistry
+from pkb_agent.prompts.query_rewriter import QueryPlanner
 from pkb_agent.rag.embeddings import EmbeddingProvider
 from pkb_agent.rag.retriever import Retriever
 from pkb_agent.storage.repositories.chunks import ChunksRepository
@@ -66,6 +68,10 @@ class AgentRuntime:
         self.registry: ToolRegistry
         self.permissions: PermissionManager
         self.ctx: ToolContext
+        self.prompt_composer: PromptComposer | None = None
+        self.query_planner: QueryPlanner | None = None
+        self._permissions_repo: PermissionsRepository | None = None
+        self._last_permission_override_refresh: float | None = None
         self._closables: list[Any] = []
         self._assembled = False
 
@@ -84,6 +90,9 @@ class AgentRuntime:
 
     def _assemble(self) -> None:
         s = self.settings
+        # Fail before assembling external collaborators when the prompt contract
+        # is invalid or a declared prompt file is missing.
+        self.prompt_composer = PromptComposer(PromptRegistry.from_settings(s))
 
         # Storage
         sb = SupabaseClient.from_settings(s)
@@ -94,6 +103,7 @@ class AgentRuntime:
             "memory": MemoryRepository(sb),
             "permissions": PermissionsRepository(sb),
         }
+        self._permissions_repo = repos["permissions"]
 
         # Embeddings (shared by retriever + memory)
         embedder = EmbeddingProvider.from_settings(s)
@@ -108,6 +118,12 @@ class AgentRuntime:
         # LLM + tools + permissions
         self.llm = DeepSeekClient.from_settings(s)
         self.registry = ToolRegistry().register_all(build_builtin_tools())
+        self.query_planner = QueryPlanner(
+            self.llm,
+            self.prompt_composer,
+            enabled=s.prompts_query_rewrite_enabled,
+            max_queries=s.prompts_query_rewrite_max_queries,
+        )
         self.permissions = PermissionManager.from_yaml(
             permissions_config_path(), confirm=self._confirm
         )
@@ -166,13 +182,18 @@ class AgentRuntime:
         state = AgentRunState(question=question)
         self.ctx.run_id = state.run_id
 
-        system_prompt = load_prompt("system_react")
-        state.messages.append(Message.system(system_prompt))
+        composition = self._compose_system_prompt()
+        state.prompt_context = composition.trace_context()
+        state.messages.append(Message.system(composition.content))
         state.messages.append(Message.user(question))
 
         await _emit(on_event, {"type": "start", "run_id": state.run_id, "question": question})
         await self.ctx.trace.start_run(
-            run_id=state.run_id, user_id=uid, question=question, status="running"
+            run_id=state.run_id,
+            user_id=uid,
+            question=question,
+            status="running",
+            prompt_context=state.prompt_context,
         )
 
         try:
@@ -197,7 +218,7 @@ class AgentRuntime:
             completion = await self.llm.chat(
                 state.messages,
                 tools=self.registry.to_schemas(),
-                temperature=self.settings.deepseek_temperature,
+                temperature=self.settings.llm_temperature,
             )
             choice = completion.first
             msg = choice.message
@@ -253,16 +274,41 @@ class AgentRuntime:
         truncated = False
         result_data: Any = None
 
+        execution_args = dict(tc.arguments)
+        prompt_context: dict[str, Any] = {}
+        if self.query_planner is not None and isinstance(execution_args.get("query"), str):
+            plan = await self.query_planner.rewrite(
+                tool_name=tc.name,
+                query=execution_args["query"],
+                question=state.question,
+            )
+            execution_args = plan.apply_to_arguments(execution_args)
+            prompt_context = plan.trace_context()
+
+        step.execution_arguments = execution_args
+        step.prompt_context = prompt_context
+        original_tool_args = tc.arguments if prompt_context.get("status") != "skipped" else None
+        await self._refresh_permission_overrides(on_event)
+        permission_source = self.permissions.rule_source_for(tc.name)
+
         await _emit(
             on_event,
-            {"type": "tool_call", "step": step.index, "tool": tc.name, "args": tc.arguments},
+            {
+                "type": "tool_call",
+                "step": step.index,
+                "tool": tc.name,
+                "args": execution_args,
+                "original_args": original_tool_args,
+                "prompt_context": prompt_context,
+                "permission_source": permission_source,
+            },
         )
 
         try:
             tool = self.registry.require(tc.name)
-            tool.validate_args(tc.arguments)
-            self.permissions.check(tc.name, tc.arguments, self.ctx)
-            result = await tool.execute(self.ctx, tc.arguments)
+            tool.validate_args(execution_args)
+            self.permissions.check(tc.name, execution_args, self.ctx)
+            result = await tool.execute(self.ctx, execution_args)
             ok = result.ok
             result_data = result.data
             truncated = result.truncated
@@ -296,7 +342,9 @@ class AgentRuntime:
             step_index=step.index,
             thought=thought,
             tool_name=tc.name,
-            tool_args=tc.arguments,
+            tool_args=execution_args,
+            original_tool_args=original_tool_args,
+            prompt_context=prompt_context,
             observation=observation_text,
             status=step.status,
             error=error,
@@ -307,7 +355,9 @@ class AgentRuntime:
             run_id=state.run_id,
             step_index=step.index,
             tool_name=tc.name,
-            arguments=tc.arguments,
+            arguments=execution_args,
+            original_arguments=original_tool_args,
+            prompt_context=prompt_context,
             result=result_data,
             ok=ok,
             truncated=truncated,
@@ -328,6 +378,69 @@ class AgentRuntime:
                 "truncated": truncated,
                 "duration_ms": duration_ms,
                 "observation": observation_text,
+            },
+        )
+
+    def _compose_system_prompt(self) -> PromptComposition:
+        """Build the run-level system prompt once from active runtime capabilities."""
+        if self.prompt_composer is not None:
+            return self.prompt_composer.compose_system(self.registry.names())
+        # Lightweight tests and third-party manual assembly remain compatible.
+        return PromptComposition(
+            content=load_prompt("system_react"),
+            phase="system",
+            manifest_version="legacy",
+        )
+
+    async def _refresh_permission_overrides(self, on_event: EventCallback | None) -> None:
+        """Refresh DB rules before a tool call, retaining YAML as the fallback.
+
+        The default refresh interval is zero, so a long-lived runtime observes
+        permission edits immediately. A positive interval limits database reads
+        while still replacing the complete override set atomically.
+        """
+        if not self.settings.permissions_db_overrides_enabled:
+            self.permissions.clear_overrides()
+            return
+        if self._permissions_repo is None:
+            return
+
+        now = time.monotonic()
+        try:
+            interval = max(float(self.settings.permissions_refresh_seconds), 0.0)
+        except (TypeError, ValueError):
+            interval = 0.0
+        if (
+            interval > 0
+            and self._last_permission_override_refresh is not None
+            and now - self._last_permission_override_refresh < interval
+        ):
+            return
+
+        self._last_permission_override_refresh = now
+        try:
+            rows = await asyncio.to_thread(self._permissions_repo.list_all)
+            issues = self.permissions.replace_overrides(rows)
+        except Exception as exc:
+            # A failed refresh must never leave a stale dynamic allow/deny in
+            # effect. The baseline YAML policy is the deterministic fallback.
+            self.permissions.clear_overrides()
+            await _emit(
+                on_event,
+                {
+                    "type": "permission_overrides_error",
+                    "error": type(exc).__name__,
+                    "fallback": "yaml",
+                },
+            )
+            return
+
+        await _emit(
+            on_event,
+            {
+                "type": "permission_overrides_refreshed",
+                "count": len(self.permissions.overrides),
+                "issues": len(issues),
             },
         )
 

@@ -233,3 +233,48 @@ def test_blocked_hosts_normalized_lowercase():
     assert "localhost" in mgr.blocked_hosts
     assert "evil.com" in mgr.blocked_hosts
     assert "LOCALHOST" not in mgr.blocked_hosts
+
+
+# ---- database-backed overrides --------------------------------------------
+
+
+def test_database_override_replaces_yaml_permission_and_constraints(make_ctx):
+    mgr = PermissionManager(
+        rules={"rag_search": ToolPermissionRule(Permission.ASK, {"max_top_k": 20})}
+    )
+
+    issues = mgr.replace_overrides(
+        [{"tool_name": "rag_search", "permission": "allow", "constraints": {"max_top_k": 2}}]
+    )
+
+    assert issues == []
+    assert mgr.rule_source_for("rag_search") == "database"
+    assert mgr.rule_for("rag_search").permission is Permission.ALLOW
+    mgr.check("rag_search", {"top_k": 2}, make_ctx())
+    with pytest.raises(ToolPermissionDenied, match="top_k"):
+        mgr.check("rag_search", {"top_k": 3}, make_ctx())
+
+
+def test_empty_database_snapshot_returns_to_yaml_baseline(make_ctx):
+    mgr = PermissionManager(rules={"tool": ToolPermissionRule(Permission.DENY)})
+    mgr.replace_overrides([{"tool_name": "tool", "permission": "allow", "constraints": {}}])
+    mgr.check("tool", {}, make_ctx())
+
+    mgr.replace_overrides([])
+
+    assert mgr.rule_source_for("tool") == "yaml"
+    with pytest.raises(ToolPermissionDenied):
+        mgr.check("tool", {}, make_ctx())
+
+
+def test_invalid_database_override_is_ignored_and_yaml_rule_remains(make_ctx):
+    mgr = PermissionManager(rules={"tool": ToolPermissionRule(Permission.DENY)})
+
+    issues = mgr.replace_overrides(
+        [{"tool_name": "tool", "permission": "sometimes", "constraints": {}}]
+    )
+
+    assert len(issues) == 1
+    assert mgr.rule_source_for("tool") == "yaml"
+    with pytest.raises(ToolPermissionDenied):
+        mgr.check("tool", {}, make_ctx())

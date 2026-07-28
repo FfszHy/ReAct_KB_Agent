@@ -1,14 +1,15 @@
 """Tool permission management.
 
-Loads ``config/permissions.yaml`` and enforces per-tool ``allow``/``ask``/``deny``
-policies plus simple argument constraints (max_top_k, max_results, char limits,
-schemes, etc.). ``ask`` tools require an interactive confirmation callback; in
-non-interactive mode they are denied.
+Loads baseline rules from ``config/permissions.yaml`` and can overlay them with
+rows from the dynamic ``tool_permissions`` table. A database row replaces the
+YAML rule for the same tool; missing/invalid/unavailable database data falls
+back to the baseline YAML policy. ``ask`` tools require an interactive
+confirmation callback; in non-interactive mode they are denied.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -42,6 +43,7 @@ class PermissionManager:
         confirm: Callable[[str, dict[str, Any]], bool] | None = None,
     ) -> None:
         self.rules: dict[str, ToolPermissionRule] = rules or {}
+        self._overrides: dict[str, ToolPermissionRule] = {}
         self.blocked_hosts = {h.lower() for h in (blocked_hosts or [])}
         self.confirm = confirm
 
@@ -62,7 +64,62 @@ class PermissionManager:
 
     # ------------------------------------------------------------------
     def rule_for(self, tool_name: str) -> ToolPermissionRule:
+        """Return the DB override when present, otherwise the YAML baseline."""
+        if tool_name in self._overrides:
+            return self._overrides[tool_name]
         return self.rules.get(tool_name, ToolPermissionRule(Permission.ALLOW))
+
+    def rule_source_for(self, tool_name: str) -> str:
+        """Return ``database``, ``yaml``, or ``default`` for observability."""
+        if tool_name in self._overrides:
+            return "database"
+        if tool_name in self.rules:
+            return "yaml"
+        return "default"
+
+    @property
+    def overrides(self) -> dict[str, ToolPermissionRule]:
+        """A copy of the currently active database-backed overrides."""
+        return dict(self._overrides)
+
+    def replace_overrides(self, rows: Iterable[dict[str, Any]]) -> list[str]:
+        """Atomically replace database overrides from repository rows.
+
+        Invalid rows are ignored so their YAML rule remains effective. The
+        returned messages are safe to surface in diagnostics without exposing
+        arguments or secrets.
+        """
+        overrides: dict[str, ToolPermissionRule] = {}
+        errors: list[str] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                errors.append("ignored non-object permission override")
+                continue
+            name = row.get("tool_name")
+            if not isinstance(name, str) or not name.strip():
+                errors.append("ignored permission override with invalid tool_name")
+                continue
+
+            raw_constraints = row.get("constraints") or {}
+            if not isinstance(raw_constraints, dict):
+                errors.append(f"ignored permission override for {name}: constraints must be an object")
+                continue
+            try:
+                permission = Permission(str(row.get("permission", "allow")).lower())
+            except ValueError:
+                errors.append(f"ignored permission override for {name}: invalid permission")
+                continue
+
+            # A DB row is a complete rule, rather than a partial merge with
+            # YAML constraints, so runtime changes are predictable.
+            overrides[name] = ToolPermissionRule(permission, dict(raw_constraints))
+
+        self._overrides = overrides
+        return errors
+
+    def clear_overrides(self) -> None:
+        """Discard dynamic rules and return to the YAML-only baseline."""
+        self._overrides = {}
 
     def check(self, tool_name: str, args: dict[str, Any], ctx: ToolContext) -> None:
         """Raise :class:`ToolPermissionDenied` if the call is not permitted."""

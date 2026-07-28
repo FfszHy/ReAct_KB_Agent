@@ -33,8 +33,16 @@ class TracesRepository:
         user_id: str = "default",
         question: str,
         status: str = "running",
+        prompt_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        row = {"id": run_id, "user_id": user_id, "question": question, "status": status}
+        row: dict[str, Any] = {
+            "id": run_id,
+            "user_id": user_id,
+            "question": question,
+            "status": status,
+        }
+        if prompt_context is not None:
+            row["prompt_context"] = prompt_context
         try:
             data = self._client.table(_RUNS).insert(row).execute().data
         except Exception as e:
@@ -79,13 +87,15 @@ class TracesRepository:
         thought: str | None = None,
         tool_name: str | None = None,
         tool_args: dict[str, Any] | None = None,
+        original_tool_args: dict[str, Any] | None = None,
+        prompt_context: dict[str, Any] | None = None,
         observation: str | None = None,
         status: str = "pending",
         error: str | None = None,
         started_at: datetime | str | None = None,
         ended_at: datetime | str | None = None,
     ) -> dict[str, Any]:
-        row = {
+        row: dict[str, Any] = {
             "run_id": run_id,
             "step_index": step_index,
             "thought": thought,
@@ -97,6 +107,10 @@ class TracesRepository:
             "started_at": _iso(started_at),
             "ended_at": _iso(ended_at),
         }
+        if original_tool_args is not None:
+            row["original_tool_args"] = original_tool_args
+        if prompt_context is not None:
+            row["prompt_context"] = prompt_context
         try:
             data = self._client.table(_STEPS).insert(row).execute().data
         except Exception as e:
@@ -111,13 +125,15 @@ class TracesRepository:
         step_index: int,
         tool_name: str,
         arguments: dict[str, Any] | None = None,
+        original_arguments: dict[str, Any] | None = None,
+        prompt_context: dict[str, Any] | None = None,
         result: Any | None = None,
         ok: bool = True,
         truncated: bool = False,
         duration_ms: int | None = None,
         error: str | None = None,
     ) -> dict[str, Any]:
-        row = {
+        row: dict[str, Any] = {
             "run_id": run_id,
             "step_index": step_index,
             "tool_name": tool_name,
@@ -128,6 +144,10 @@ class TracesRepository:
             "duration_ms": duration_ms,
             "error": error,
         }
+        if original_arguments is not None:
+            row["original_arguments"] = original_arguments
+        if prompt_context is not None:
+            row["prompt_context"] = prompt_context
         try:
             data = self._client.table(_TOOLCALLS).insert(row).execute().data
         except Exception as e:

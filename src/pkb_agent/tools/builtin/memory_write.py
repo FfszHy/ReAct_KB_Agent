@@ -11,7 +11,7 @@ from pkb_agent.tools.result import ToolResult
 class MemoryWriteTool(BaseTool):
     name = "memory_write"
     description = (
-        "Persist a note to long-term memory for future runs. Use sparingly for "
+        "Persist a note for future recall. Use sparingly for "
         "stable facts, resolved preferences, or reusable decisions — not for "
         "ephemeral state."
     )
@@ -28,9 +28,8 @@ class MemoryWriteTool(BaseTool):
         ToolParam(
             "scope",
             "string",
-            "Memory scope.",
+            "Memory scope. Defaults to the configured policy scope.",
             required=False,
-            default="long",
             enum=["short", "long"],
         ),
     ]
@@ -41,9 +40,9 @@ class MemoryWriteTool(BaseTool):
         if not content:
             return ToolResult.failure("content must not be empty")
         kind = str(args.get("kind") or "fact")
-        scope = str(args.get("scope") or "long")
         try:
             manager = ctx.service("memory_manager")
+            scope = str(args["scope"]) if args.get("scope") else manager.default_scope()
             row = await manager.write(
                 user_id=ctx.user_id or "default",
                 content=content,

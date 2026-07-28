@@ -44,6 +44,7 @@ class TraceRecorder:
         user_id: str = "default",
         question: str,
         status: str = "running",
+        prompt_context: dict | None = None,
     ) -> None:
         if not self._enabled:
             return None
@@ -53,6 +54,7 @@ class TraceRecorder:
             user_id=user_id,
             question=question,
             status=status,
+            prompt_context=prompt_context,
         )
 
     async def finish_run(
@@ -87,6 +89,8 @@ class TraceRecorder:
         thought: str | None = None,
         tool_name: str | None = None,
         tool_args: dict | None = None,
+        original_tool_args: dict | None = None,
+        prompt_context: dict | None = None,
         observation: str | None = None,
         status: str = "ok",
         error: str | None = None,
@@ -98,6 +102,10 @@ class TraceRecorder:
         if self._redact:
             if tool_args is not None:
                 tool_args = redact_args(tool_args)
+            if original_tool_args is not None:
+                original_tool_args = redact_args(original_tool_args)
+            if prompt_context is not None:
+                prompt_context = redact_args(prompt_context)
             if observation is not None:
                 observation = redact_text(observation)
             if error is not None:
@@ -109,6 +117,8 @@ class TraceRecorder:
             thought=thought,
             tool_name=tool_name,
             tool_args=tool_args,
+            original_tool_args=original_tool_args,
+            prompt_context=prompt_context,
             observation=observation,
             status=status,
             error=error,
@@ -123,6 +133,8 @@ class TraceRecorder:
         step_index: int,
         tool_name: str,
         arguments: dict | None = None,
+        original_arguments: dict | None = None,
+        prompt_context: dict | None = None,
         result: Any | None = None,
         ok: bool = True,
         truncated: bool = False,
@@ -134,6 +146,10 @@ class TraceRecorder:
         if self._redact:
             if arguments is not None:
                 arguments = redact_args(arguments)
+            if original_arguments is not None:
+                original_arguments = redact_args(original_arguments)
+            if prompt_context is not None:
+                prompt_context = redact_args(prompt_context)
             if result is not None:
                 result = redact_result(result)
             if error is not None:
@@ -144,6 +160,8 @@ class TraceRecorder:
             step_index=step_index,
             tool_name=tool_name,
             arguments=arguments,
+            original_arguments=original_arguments,
+            prompt_context=prompt_context,
             result=result,
             ok=ok,
             truncated=truncated,

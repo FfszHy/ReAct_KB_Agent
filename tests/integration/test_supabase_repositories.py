@@ -326,6 +326,40 @@ def test_traces_finish_run_only_includes_provided_fields():
     assert update_call["fields"] == {"status": "finished"}
 
 
+def test_traces_store_prompt_and_rewrite_provenance_when_provided():
+    client = _FakeSupabaseClient().queue([{"id": "r1"}]).queue([{"id": "s1"}]).queue([{"id": "t1"}])
+    repo = TracesRepository(client)
+
+    repo.create_run(
+        run_id="r1",
+        question="why?",
+        prompt_context={"prompts": [{"id": "system_react", "sha256": "abc"}]},
+    )
+    repo.add_step(
+        run_id="r1",
+        step_index=0,
+        tool_name="rag_search",
+        tool_args={"query": "auth decision"},
+        original_tool_args={"query": "What did we decide about auth?"},
+        prompt_context={"status": "applied"},
+    )
+    repo.add_tool_call(
+        run_id="r1",
+        step_index=0,
+        tool_name="rag_search",
+        arguments={"query": "auth decision"},
+        original_arguments={"query": "What did we decide about auth?"},
+        prompt_context={"status": "applied"},
+    )
+
+    run_row = client.find_call("insert", "agent_runs")["row"]
+    step_row = client.find_call("insert", "agent_steps")["row"]
+    call_row = client.find_call("insert", "tool_calls")["row"]
+    assert run_row["prompt_context"]["prompts"][0]["id"] == "system_react"
+    assert step_row["original_tool_args"]["query"].startswith("What did")
+    assert call_row["original_arguments"]["query"].startswith("What did")
+
+
 # --------------------------------------------------------------------------- #
 # MemoryRepository
 # --------------------------------------------------------------------------- #
@@ -374,4 +408,3 @@ def test_permissions_upsert_uses_on_conflict_tool_name():
     assert call["on_conflict"] == "tool_name"
     assert call["payload"]["permission"] == "ask"
     assert call["payload"]["constraints"] == {"max_top_k": 5}
-

@@ -1,6 +1,6 @@
 -- 006_permissions_tables.sql
--- Optional runtime tool-permission overrides (the YAML policy is the primary
--- source of truth; this table allows dynamic overrides stored in DB).
+-- Runtime tool-permission overrides. YAML provides the baseline fallback;
+-- a row in this table replaces the YAML rule for that exact tool.
 
 create table if not exists public.tool_permissions (
     id          uuid primary key default gen_random_uuid(),

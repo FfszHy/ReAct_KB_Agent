@@ -1,4 +1,6 @@
-# Tool permission policy.
+# Baseline tool permission policy.
+# Rows in the dynamic ``tool_permissions`` table replace this rule for the same
+# tool at runtime; this file remains the fallback if no DB row exists.
 # allow:  always permitted
 # ask:    require interactive confirmation before execution
 # deny:   never permitted

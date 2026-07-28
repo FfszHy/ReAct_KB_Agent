@@ -33,6 +33,8 @@ class AgentStep:
     index: int
     thought: str | None = None
     tool_call: ToolCall | None = None
+    execution_arguments: dict | None = None
+    prompt_context: dict = field(default_factory=dict)
     observation: str | None = None
     status: str = "pending"  # pending | ok | error | skipped
     error: str | None = None
@@ -54,6 +56,8 @@ class AgentStep:
                 if self.tool_call
                 else None
             ),
+            "execution_arguments": self.execution_arguments,
+            "prompt_context": self.prompt_context,
             "observation": self.observation,
             "status": self.status,
             "error": self.error,
@@ -70,6 +74,7 @@ class AgentRunState:
     question: str = ""
     messages: list[Message] = field(default_factory=list)
     steps: list[AgentStep] = field(default_factory=list)
+    prompt_context: dict = field(default_factory=dict)
     status: AgentStatus = AgentStatus.RUNNING
     final_answer: str | None = None
     error: str | None = None
@@ -91,6 +96,7 @@ class AgentRunState:
             "status": self.status.value,
             "step_count": self.step_count,
             "steps": [s.to_dict() for s in self.steps],
+            "prompt_context": self.prompt_context,
             "final_answer": self.final_answer,
             "error": self.error,
             "created_at": _utc_iso(self.created_at),

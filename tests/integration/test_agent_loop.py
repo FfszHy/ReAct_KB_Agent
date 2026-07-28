@@ -12,6 +12,7 @@ well for cohesion.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any, ClassVar
 from unittest.mock import AsyncMock, MagicMock
 
@@ -29,8 +30,11 @@ from pkb_agent.llm.schemas import (
     build_chat_request,
     parse_chat_completion,
 )
+from pkb_agent.prompts import PromptComposer, PromptRegistry
+from pkb_agent.prompts.query_rewriter import QueryPlan
 from pkb_agent.tools.base import BaseTool, ToolContext, ToolParam
-from pkb_agent.tools.permissions import PermissionManager
+from pkb_agent.tools.builtin.memory_write import MemoryWriteTool
+from pkb_agent.tools.permissions import Permission, PermissionManager, ToolPermissionRule
 from pkb_agent.tools.registry import ToolRegistry
 from pkb_agent.tools.result import ToolResult
 
@@ -57,6 +61,43 @@ class _FailTool(BaseTool):
 
     async def execute(self, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
         return ToolResult.failure("boom failure")
+
+
+class _RecordingEchoTool(_EchoTool):
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def execute(self, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
+        self.calls.append(dict(args))
+        return ToolResult.success({"echo": args.get("message")})
+
+
+class _RecordingRagTool(BaseTool):
+    name = "rag_search"
+    description = "record search arguments"
+    params: ClassVar[list[ToolParam]] = [
+        ToolParam(name="query", type="string", description="search query"),
+        ToolParam(name="queries", type="array", description="expanded queries", required=False),
+    ]
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def execute(self, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
+        self.calls.append(dict(args))
+        return ToolResult.success({"ok": True})
+
+
+class _RewriteStub:
+    async def rewrite(self, *, tool_name: str, query: str, question: str = "") -> QueryPlan:
+        assert tool_name == "rag_search"
+        assert question
+        return QueryPlan(
+            original_query=query,
+            queries=("auth architecture decision", "SSO design"),
+            status="applied",
+            prompt_context={"prompts": [{"id": "query_rewrite", "sha256": "test"}]},
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -262,6 +303,31 @@ async def test_run_single_step_answer_no_tools():
     assert finish_kwargs["final_answer"] == "42 is the answer"
 
 
+async def test_run_composes_memory_policy_when_memory_write_is_registered():
+    trace = _make_trace()
+    rt = _make_runtime(
+        llm_side_effect=[_answer_completion("done")],
+        tools=[MemoryWriteTool()],
+        trace=trace,
+    )
+    root = Path(__file__).parents[2]
+    rt.prompt_composer = PromptComposer(
+        PromptRegistry(
+            prompt_dir=root / "config" / "prompts",
+            manifest_path=root / "config" / "prompts" / "manifest.yaml",
+        )
+    )
+
+    state = await rt.run("hello")
+
+    assert "What to write to memory" in (state.messages[0].content or "")
+    start_kwargs = trace.start_run.call_args.kwargs
+    assert [item["id"] for item in start_kwargs["prompt_context"]["prompts"]] == [
+        "system_react",
+        "memory_policy",
+    ]
+
+
 # --------------------------------------------------------------------------- #
 # AgentRuntime loop: one tool call then answer
 # --------------------------------------------------------------------------- #
@@ -295,6 +361,87 @@ async def test_run_one_tool_call_then_answer():
     tool_call_kwargs = trace.add_tool_call.call_args.kwargs
     assert tool_call_kwargs["tool_name"] == "echo"
     assert tool_call_kwargs["ok"] is True
+
+
+async def test_database_permission_overrides_refresh_before_each_tool_call():
+    tool = _RecordingEchoTool()
+    first = ToolCall(id="tc1", name="echo", arguments={"message": "first"})
+    second = ToolCall(id="tc2", name="echo", arguments={"message": "second"})
+    trace = _make_trace()
+    rt = _make_runtime(
+        llm_side_effect=[
+            _tool_completion("first", first),
+            _tool_completion("second", second),
+            _answer_completion("done"),
+        ],
+        tools=[tool],
+        trace=trace,
+    )
+    rt.permissions = PermissionManager(
+        rules={"echo": ToolPermissionRule(Permission.ALLOW)}
+    )
+    repo = MagicMock()
+    repo.list_all.side_effect = [
+        [{"tool_name": "echo", "permission": "deny", "constraints": {}}],
+        [],
+    ]
+    rt._permissions_repo = repo
+    events: list[dict[str, Any]] = []
+
+    state = await rt.run("try twice", on_event=events.append)
+
+    assert state.steps[0].status == "error"
+    assert state.steps[1].status == "ok"
+    assert tool.calls == [{"message": "second"}]
+    assert repo.list_all.call_count == 2
+    sources = [event["permission_source"] for event in events if event["type"] == "tool_call"]
+    assert sources == ["database", "yaml"]
+
+
+async def test_database_permission_load_failure_falls_back_to_yaml():
+    tool = _RecordingEchoTool()
+    tc = ToolCall(id="tc1", name="echo", arguments={"message": "blocked"})
+    rt = _make_runtime(
+        llm_side_effect=[_tool_completion("try", tc), _answer_completion("done")],
+        tools=[tool],
+    )
+    rt.permissions = PermissionManager(rules={"echo": ToolPermissionRule(Permission.DENY)})
+    repo = MagicMock()
+    repo.list_all.side_effect = RuntimeError("database offline")
+    rt._permissions_repo = repo
+    events: list[dict[str, Any]] = []
+
+    state = await rt.run("try", on_event=events.append)
+
+    assert state.steps[0].status == "error"
+    assert tool.calls == []
+    fallback = next(event for event in events if event["type"] == "permission_overrides_error")
+    assert fallback["fallback"] == "yaml"
+
+
+async def test_run_rewrites_retrieval_arguments_and_traces_both_versions():
+    tool = _RecordingRagTool()
+    tc = ToolCall(id="tc1", name="rag_search", arguments={"query": "What did we decide about auth?"})
+    trace = _make_trace()
+    rt = _make_runtime(
+        llm_side_effect=[_tool_completion("search", tc), _answer_completion("done")],
+        tools=[tool],
+        trace=trace,
+    )
+    rt.query_planner = _RewriteStub()  # type: ignore[assignment]
+
+    state = await rt.run("What did we decide about auth?")
+
+    assert state.steps[0].tool_call.arguments == {"query": "What did we decide about auth?"}
+    assert state.steps[0].execution_arguments == {
+        "query": "auth architecture decision",
+        "queries": ["auth architecture decision", "SSO design"],
+    }
+    assert tool.calls == [state.steps[0].execution_arguments]
+    trace_kwargs = trace.add_tool_call.call_args.kwargs
+    assert trace_kwargs["original_arguments"] == {"query": "What did we decide about auth?"}
+    assert trace_kwargs["arguments"] == state.steps[0].execution_arguments
+    assert trace_kwargs["prompt_context"]["prompts"][0]["id"] == "query_rewrite"
 
 
 # --------------------------------------------------------------------------- #

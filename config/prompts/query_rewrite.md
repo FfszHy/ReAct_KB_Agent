@@ -15,5 +15,6 @@ Examples:
 - "How do I configure pgvector distance operators?"
   → query: `pgvector distance operator configuration`
 
-You do not emit the rewrite as a separate step unless a `query_rewrite` tool is
-available; otherwise apply the rewrite inline when forming tool arguments.
+At runtime this prompt is invoked only by the retrieval QueryPlanner, directly
+before `rag_search` or `web_search`. Follow the JSON output contract supplied
+by that caller; do not add explanations or Markdown fences.

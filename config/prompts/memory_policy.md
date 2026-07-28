@@ -3,6 +3,9 @@
 The agent's `memory_write` tool is the ONLY way the agent persists anything
 across runs. Use it sparingly and deliberately.
 
+The runtime requires confirmation for memory writes by default and rejects
+secret-looking content even if a write is approved.
+
 ## What to write to memory
 
 - Stable facts the user explicitly asks to remember.

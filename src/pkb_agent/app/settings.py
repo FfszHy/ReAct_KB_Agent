@@ -94,7 +94,9 @@ class Settings(BaseSettings):
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-v4-flash"
-    deepseek_temperature: float = 0.2
+    # ``DEEPSEEK_TEMPERATURE`` remains supported as a high-priority override.
+    # The normal YAML-facing setting is ``agent.temperature``.
+    deepseek_temperature: float | None = None
 
     # Supabase
     supabase_url: str = ""
@@ -119,6 +121,7 @@ class Settings(BaseSettings):
     # Agent
     agent_max_steps: int = 12
     agent_tool_result_max_chars: int = 6000
+    agent_temperature: float = 0.2
 
     # RAG
     rag_top_k: int = 6
@@ -131,6 +134,18 @@ class Settings(BaseSettings):
 
     # Memory
     memory_max_results: int = 5
+    memory_default_scope: str = "long"
+    memory_max_content_chars: int = 4000
+    memory_reject_secrets: bool = True
+
+    # Prompts
+    prompts_manifest_path: str = ""
+    prompts_query_rewrite_enabled: bool = True
+    prompts_query_rewrite_max_queries: int = 3
+
+    # Dynamic permission overrides
+    permissions_db_overrides_enabled: bool = True
+    permissions_refresh_seconds: float = 0.0
 
     # Trace
     trace_enabled: bool = True
@@ -173,6 +188,13 @@ class Settings(BaseSettings):
 
     def require_web_search(self) -> None:
         self.require("web_search_api_key")
+
+    @property
+    def llm_temperature(self) -> float:
+        """Return the legacy DeepSeek override or the configured agent default."""
+        if self.deepseek_temperature is not None:
+            return self.deepseek_temperature
+        return self.agent_temperature
 
 
 _settings: Settings | None = None

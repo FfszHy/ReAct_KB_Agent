@@ -74,18 +74,19 @@ class MemoryManager:
         user_id: str = "default",
         content: str,
         kind: str = "fact",
-        scope: str = "long",
+        scope: str | None = None,
         run_id: str | None = None,
         meta: dict | None = None,
     ) -> dict:
-        ok, reason = self._policy.validate(content=content, kind=kind, scope=scope)
+        resolved_scope = scope or self._policy.default_scope()
+        ok, reason = self._policy.validate(content=content, kind=kind, scope=resolved_scope)
         if not ok:
             raise ValueError(f"invalid memory: {reason}")
         embedding = await self._embedder.embed_one(content)
         row = await asyncio.to_thread(
             self._repo.create,
             user_id=user_id,
-            scope=scope,
+            scope=resolved_scope,
             kind=kind,
             content=content,
             embedding=embedding,
@@ -93,6 +94,10 @@ class MemoryManager:
             meta=meta,
         )
         return row
+
+    def default_scope(self) -> str:
+        """Expose the policy default without leaking the policy implementation."""
+        return self._policy.default_scope()
 
     async def search(
         self,

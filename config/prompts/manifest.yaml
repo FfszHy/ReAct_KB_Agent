@@ -1,0 +1,18 @@
+# Prompt lifecycle declarations. Prompt bodies remain in adjacent Markdown files.
+version: 1
+
+prompts:
+  system_react:
+    file: system_react.md
+    phase: system
+    always: true
+
+  memory_policy:
+    file: memory_policy.md
+    phase: system
+    when_tool_available: memory_write
+
+  query_rewrite:
+    file: query_rewrite.md
+    phase: pre_tool
+    tools: [rag_search, web_search]
