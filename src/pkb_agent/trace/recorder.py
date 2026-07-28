@@ -63,6 +63,8 @@ class TraceRecorder:
         *,
         status: str,
         final_answer: str | None = None,
+        answer_payload: dict | None = None,
+        verification: dict | None = None,
         error: str | None = None,
         step_count: int | None = None,
         usage: dict | None = None,
@@ -71,11 +73,17 @@ class TraceRecorder:
             return None
         if self._redact and error is not None:
             error = redact_text(error)
+        if self._redact and answer_payload is not None:
+            answer_payload = redact_result(answer_payload)
+        if self._redact and verification is not None:
+            verification = redact_result(verification)
         await asyncio.to_thread(
             self._repo.finish_run,
             run_id,
             status=status,
             final_answer=final_answer,
+            answer_payload=answer_payload,
+            verification=verification,
             error=error,
             step_count=step_count,
             usage=usage,

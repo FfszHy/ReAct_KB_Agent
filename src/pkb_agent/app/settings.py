@@ -117,11 +117,18 @@ class Settings(BaseSettings):
     web_fetch_timeout: int = 20
     web_max_results: int = 5
     web_fetch_max_chars: int = 8000
+    # Web-page citation provenance and freshness policy.
+    web_evidence_ttl_hours: int = 168
+    web_trusted_domains: list[str] = Field(default_factory=list)
 
     # Agent
     agent_max_steps: int = 12
     agent_tool_result_max_chars: int = 6000
     agent_temperature: float = 0.2
+    agent_answer_verification_max_retries: int = 2
+    # DeepSeek JSON Output needs an explicit enough completion ceiling so a
+    # valid answer object is not cut off mid-generation.
+    agent_json_output_max_tokens: int = Field(default=4096, ge=1)
 
     # RAG
     rag_top_k: int = 6

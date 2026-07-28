@@ -3,9 +3,15 @@
 # (see src/pkb_agent/app/settings.py).
 
 agent:
-  max_steps: 12
+  max_steps: 20
   tool_result_max_chars: 6000
   temperature: 0.2
+  # Invalid final JSON/citations get this many repair attempts before a
+  # deterministic insufficient-evidence refusal is returned.
+  answer_verification_max_retries: 2
+  # Passed as max_tokens with DeepSeek JSON Output so final JSON is not
+  # truncated mid-object. Override with AGENT_JSON_OUTPUT_MAX_TOKENS if needed.
+  json_output_max_tokens: 4096
   # Hard ceiling on a single tool result before truncation kicks in.
 
 rag:
@@ -27,6 +33,12 @@ web:
   fetch_timeout: 20
   max_results: 5
   fetch_max_chars: 8000
+  # Web pages become citation-eligible only after web_fetch. Their provenance
+  # retains this freshness window.
+  evidence_ttl_hours: 168
+  # Exact domains and their subdomains get high trust; other HTTPS pages are
+  # medium and plain HTTP pages are low.
+  trusted_domains: []
 
 memory:
   max_results: 5

@@ -63,6 +63,7 @@ class WebFetchTool(BaseTool):
                 "title": page.title,
                 "status_code": page.status_code,
                 "content_type": page.content_type,
+                "fetched_at": page.fetched_at,
                 "truncated": truncated,
                 "text": text,
             },

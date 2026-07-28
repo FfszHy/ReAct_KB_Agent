@@ -118,6 +118,7 @@ def build_chat_request(
     tools: list[dict[str, Any]] | None = None,
     temperature: float = 0.2,
     max_tokens: int | None = None,
+    response_format: dict[str, Any] | None = None,
     tool_choice: str | dict | None = None,
     stream: bool = False,
 ) -> dict[str, Any]:
@@ -134,6 +135,8 @@ def build_chat_request(
             body["tool_choice"] = tool_choice
     if max_tokens is not None:
         body["max_tokens"] = max_tokens
+    if response_format is not None:
+        body["response_format"] = dict(response_format)
     return body
 
 

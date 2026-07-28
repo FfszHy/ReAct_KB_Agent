@@ -21,6 +21,7 @@ import pytest
 from pkb_agent.agent.errors import AgentError, ToolNotFoundError
 from pkb_agent.agent.runtime import AgentRuntime
 from pkb_agent.agent.state import AgentStatus
+from pkb_agent.agent.verification import ValidationResult, VerifiedAnswer
 from pkb_agent.app.settings import Settings
 from pkb_agent.llm.schemas import (
     ChatChoice,
@@ -88,6 +89,30 @@ class _RecordingRagTool(BaseTool):
         return ToolResult.success({"ok": True})
 
 
+class _EvidenceRagTool(BaseTool):
+    name = "rag_search"
+    description = "return a citation-eligible chunk"
+    params: ClassVar[list[ToolParam]] = [
+        ToolParam(name="query", type="string", description="search query")
+    ]
+
+    async def execute(self, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
+        return ToolResult.success(
+            {
+                "results": [
+                    {
+                        "chunk_id": "chunk-1",
+                        "document_id": "doc-1",
+                        "chunk_index": 0,
+                        "title": "Architecture decision",
+                        "source_uri": "kb://doc-1",
+                        "content_preview": "Use SSO for authentication.",
+                    }
+                ]
+            }
+        )
+
+
 class _RewriteStub:
     async def rewrite(self, *, tool_name: str, query: str, question: str = "") -> QueryPlan:
         assert tool_name == "rag_search"
@@ -97,6 +122,20 @@ class _RewriteStub:
             queries=("auth architecture decision", "SSO design"),
             status="applied",
             prompt_context={"prompts": [{"id": "query_rewrite", "sha256": "test"}]},
+        )
+
+
+class _PassthroughAnswerVerifier:
+    """Keeps legacy loop tests focused on orchestration, not answer contracts."""
+
+    def validate(self, content: str | None, evidence) -> ValidationResult:
+        return ValidationResult(
+            payload=VerifiedAnswer(
+                answer=content or "",
+                claims=(),
+                citations=(),
+                status="insufficient_evidence",
+            )
         )
 
 
@@ -146,6 +185,7 @@ def _make_runtime(
     max_steps: int = 12,
     tools: list[BaseTool] | None = None,
     trace: MagicMock | None = None,
+    strict_verification: bool = False,
 ) -> AgentRuntime:
     """Build an AgentRuntime with mocked dependencies (no real services)."""
     settings = Settings(agent_max_steps=max_steps, agent_tool_result_max_chars=1000)
@@ -159,6 +199,8 @@ def _make_runtime(
     rt.permissions = PermissionManager()
     mock_trace = trace if trace is not None else _make_trace()
     rt.ctx = ToolContext(settings=settings, supabase=None, trace=mock_trace)
+    if not strict_verification:
+        rt.answer_verifier = _PassthroughAnswerVerifier()
     rt._assembled = True
     return rt
 
@@ -268,9 +310,17 @@ def test_parse_chat_completion_round_trip_with_tool_calls():
     assert completion.usage == {"prompt_tokens": 5, "completion_tokens": 3}
 
     # build_chat_request must round-trip the message back to a serializable dict.
-    body = build_chat_request(model="m", messages=[choice.message], temperature=0.2)
+    body = build_chat_request(
+        model="m",
+        messages=[choice.message],
+        temperature=0.2,
+        max_tokens=1024,
+        response_format={"type": "json_object"},
+    )
     assert body["messages"][0]["role"] == "assistant"
     assert body["messages"][0]["tool_calls"][0]["function"]["name"] == "echo"
+    assert body["max_tokens"] == 1024
+    assert body["response_format"] == {"type": "json_object"}
 
 
 def test_chat_completion_first_raises_when_no_choices():
@@ -297,6 +347,9 @@ async def test_run_single_step_answer_no_tools():
     assert len(state.messages) == 3
     assert state.messages[-1].role == "assistant"
     rt.llm.chat.assert_awaited_once()
+    chat_kwargs = rt.llm.chat.call_args.kwargs
+    assert chat_kwargs["response_format"] == {"type": "json_object"}
+    assert chat_kwargs["max_tokens"] == rt.settings.agent_json_output_max_tokens
     trace.finish_run.assert_awaited_once()
     finish_kwargs = trace.finish_run.call_args.kwargs
     assert finish_kwargs["status"] == "finished"
@@ -442,6 +495,77 @@ async def test_run_rewrites_retrieval_arguments_and_traces_both_versions():
     assert trace_kwargs["original_arguments"] == {"query": "What did we decide about auth?"}
     assert trace_kwargs["arguments"] == state.steps[0].execution_arguments
     assert trace_kwargs["prompt_context"]["prompts"][0]["id"] == "query_rewrite"
+
+
+async def test_run_repairs_invalid_citations_against_this_runs_evidence_ledger():
+    tc = ToolCall(id="tc1", name="rag_search", arguments={"query": "authentication"})
+    invalid = json.dumps(
+        {
+            "answer": "Use SSO.",
+            "claims": [
+                {"text": "Use SSO.", "kind": "fact", "citations": ["kb:invented"]}
+            ],
+            "citations": [{"id": "kb:invented"}],
+        }
+    )
+    repaired = json.dumps(
+        {
+            "status": "grounded",
+            "answer": "Use SSO for authentication.",
+            "claims": [
+                {"text": "Use SSO for authentication.", "kind": "fact", "citations": ["kb:chunk-1"]}
+            ],
+            "citations": [{"id": "kb:chunk-1"}],
+        }
+    )
+    trace = _make_trace()
+    rt = _make_runtime(
+        llm_side_effect=[
+            _tool_completion("search", tc),
+            _answer_completion(invalid),
+            _answer_completion(repaired),
+        ],
+        tools=[_EvidenceRagTool()],
+        trace=trace,
+        strict_verification=True,
+    )
+    events: list[dict[str, Any]] = []
+
+    state = await rt.run("What authentication approach should we use?", on_event=events.append)
+
+    assert state.status is AgentStatus.FINISHED
+    assert state.final_answer == "Use SSO for authentication."
+    assert state.verification["status"] == "verified"
+    assert state.verification["repair_attempts"] == 1
+    assert state.answer_payload["citations"][0]["source_id"] == "chunk-1"
+    assert "citation_evidence" in (state.messages[3].content or "")
+    assert "kb:chunk-1" in (state.messages[3].content or "")
+    assert rt.llm.chat.await_count == 3
+    failed = next(event for event in events if event["type"] == "answer_verification_failed")
+    assert "was not retrieved in this run" in failed["errors"][0]
+    finish_kwargs = trace.finish_run.call_args.kwargs
+    assert finish_kwargs["answer_payload"]["status"] == "grounded"
+
+
+async def test_run_refuses_when_final_answer_cannot_be_verified():
+    trace = _make_trace()
+    rt = _make_runtime(
+        llm_side_effect=[_answer_completion("this is not JSON")],
+        trace=trace,
+        strict_verification=True,
+    )
+    rt.settings.agent_answer_verification_max_retries = 0
+
+    state = await rt.run("answer without evidence")
+
+    assert state.status is AgentStatus.FINISHED
+    assert state.answer_payload["status"] == "insufficient_evidence"
+    assert state.verification["status"] == "refused"
+    assert state.verification["reason"] == "answer_validation_failed"
+    assert state.answer_payload["claims"] == []
+    assert state.answer_payload["citations"] == []
+    finish_kwargs = trace.finish_run.call_args.kwargs
+    assert finish_kwargs["verification"]["status"] == "refused"
 
 
 # --------------------------------------------------------------------------- #

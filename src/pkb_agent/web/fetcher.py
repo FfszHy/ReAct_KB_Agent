@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -33,6 +34,7 @@ class FetchedPage:
     status_code: int
     content_type: str
     truncated: bool
+    fetched_at: str = ""
     error: str | None = None
 
 
@@ -84,6 +86,7 @@ class Fetcher:
     async def fetch(self, url: str) -> FetchedPage:
         # Unsafe URLs raise UnsafeUrlError (caller handles).
         assert_safe_url(url)
+        fetched_at = datetime.now(UTC).isoformat()
 
         client = self._ensure_client()
         try:
@@ -97,6 +100,7 @@ class Fetcher:
                 status_code=0,
                 content_type="",
                 truncated=False,
+                fetched_at=fetched_at,
                 error=f"request failed: {exc}",
             )
 
@@ -120,6 +124,7 @@ class Fetcher:
                 status_code=resp.status_code,
                 content_type=content_type,
                 truncated=False,
+                fetched_at=fetched_at,
                 error=f"unsupported content type: {content_type!r}",
             )
 
@@ -132,6 +137,7 @@ class Fetcher:
             status_code=resp.status_code,
             content_type=content_type,
             truncated=truncated,
+            fetched_at=fetched_at,
         )
 
 

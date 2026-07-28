@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 
+from pkb_agent.agent.verification import Evidence
 from pkb_agent.llm.schemas import Message, ToolCall
 
 
@@ -77,6 +78,12 @@ class AgentRunState:
     prompt_context: dict = field(default_factory=dict)
     status: AgentStatus = AgentStatus.RUNNING
     final_answer: str | None = None
+    # Canonical JSON answer and its verification audit. Evidence records only
+    # exist for sources retrieved during this run.
+    answer_payload: dict | None = None
+    verification: dict = field(default_factory=dict)
+    evidence: dict[str, Evidence] = field(default_factory=dict)
+    verification_attempts: int = 0
     error: str | None = None
     created_at: datetime = field(default_factory=_now)
 
@@ -98,6 +105,15 @@ class AgentRunState:
             "steps": [s.to_dict() for s in self.steps],
             "prompt_context": self.prompt_context,
             "final_answer": self.final_answer,
+            "answer": self.answer_payload,
+            "verification": self.verification,
+            "retrieved_evidence": [
+                _serialize_evidence(record) for record in self.evidence.values()
+            ],
             "error": self.error,
             "created_at": _utc_iso(self.created_at),
         }
+
+
+def _serialize_evidence(record: Evidence) -> dict:
+    return record.to_dict()

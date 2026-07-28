@@ -326,6 +326,23 @@ def test_traces_finish_run_only_includes_provided_fields():
     assert update_call["fields"] == {"status": "finished"}
 
 
+def test_traces_finish_run_persists_answer_contract_and_verification_audit():
+    client = _FakeSupabaseClient().queue([{"id": "r1"}])
+    repo = TracesRepository(client)
+
+    repo.finish_run(
+        "r1",
+        status="finished",
+        final_answer="Use SSO.",
+        answer_payload={"status": "grounded", "answer": "Use SSO.", "claims": [], "citations": []},
+        verification={"status": "verified", "cited_evidence_count": 1},
+    )
+
+    fields = client.find_call("update", "agent_runs")["fields"]
+    assert fields["answer_payload"]["answer"] == "Use SSO."
+    assert fields["verification"]["status"] == "verified"
+
+
 def test_traces_store_prompt_and_rewrite_provenance_when_provided():
     client = _FakeSupabaseClient().queue([{"id": "r1"}]).queue([{"id": "s1"}]).queue([{"id": "t1"}])
     repo = TracesRepository(client)

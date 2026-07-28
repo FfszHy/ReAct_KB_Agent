@@ -10,6 +10,7 @@ from typing import Any
 import typer
 from rich.console import Console
 from rich.panel import Panel
+from rich.text import Text
 
 from pkb_agent.agent.runtime import AgentRuntime
 from pkb_agent.app.settings import get_settings
@@ -51,7 +52,9 @@ def ask(
             if json_output:
                 console.print_json(json.dumps(state.to_dict(), ensure_ascii=False))
             else:
-                if state.final_answer:
+                if state.answer_payload:
+                    _render_verified_answer(state.answer_payload, state.verification)
+                elif state.final_answer:
                     console.print(
                         Panel(
                             state.final_answer,
@@ -201,10 +204,96 @@ def _render_event(event: dict[str, Any]) -> None:
     elif etype == "answer":
         # answer is rendered by the caller (panel); nothing here.
         pass
+    elif etype == "answer_verification_failed":
+        errors = event.get("errors") or []
+        first_error = str(errors[0]) if errors else "invalid final answer"
+        console.print(
+            "[yellow]answer verification failed; requesting a repair "
+            f"({event.get('retry')}/{event.get('retry_limit')}):[/yellow] {first_error}"
+        )
     elif etype == "max_steps":
         console.print(f"[yellow]max steps reached ({event.get('steps')})[/yellow]")
     elif etype == "error":
         console.print(f"[red]error:[/red] {event.get('error')}")
+
+
+def _render_verified_answer(payload: dict[str, Any], verification: dict[str, Any]) -> None:
+    """Render source facts and model inferences as visibly different blocks."""
+    answer = str(payload.get("answer") or "")
+    status = str(payload.get("status") or "grounded")
+    border = "green" if status == "grounded" else "yellow"
+    title = "Answer" if status == "grounded" else "Evidence boundary"
+    console.print(Panel(Text(answer), title=title, border_style=border))
+
+    claims = payload.get("claims")
+    if not isinstance(claims, list):
+        claims = []
+    facts = [claim for claim in claims if isinstance(claim, dict) and claim.get("kind") == "fact"]
+    inferences = [
+        claim for claim in claims if isinstance(claim, dict) and claim.get("kind") == "inference"
+    ]
+    if facts:
+        console.print(
+            Panel(
+                _claims_text(facts),
+                title="原文事实 / Source facts",
+                border_style="cyan",
+            )
+        )
+    if inferences:
+        console.print(
+            Panel(
+                _claims_text(inferences),
+                title="模型推断 / Model inferences",
+                border_style="magenta",
+            )
+        )
+
+    citations = payload.get("citations")
+    if isinstance(citations, list) and citations:
+        console.print(
+            Panel(
+                _citations_text(citations),
+                title="Verified citations",
+                border_style="blue",
+            )
+        )
+    if verification.get("status") == "refused":
+        console.print(
+            f"[yellow]verification:[/yellow] refused ({verification.get('reason', 'unknown')})"
+        )
+
+
+def _claims_text(claims: list[dict[str, Any]]) -> Text:
+    text = Text()
+    for index, claim in enumerate(claims, start=1):
+        if index > 1:
+            text.append("\n")
+        text.append(f"{index}. {claim.get('text', '')}\n")
+        citation_ids = claim.get("citations") or []
+        text.append(f"   Evidence: {', '.join(str(item) for item in citation_ids)}", style="dim")
+    return text
+
+
+def _citations_text(citations: list[Any]) -> Text:
+    text = Text()
+    for citation in citations:
+        if not isinstance(citation, dict):
+            continue
+        if text.plain:
+            text.append("\n")
+        title = str(citation.get("title") or citation.get("source_id") or "(untitled)")
+        text.append(f"{citation.get('id', '')}  {title}\n")
+        text.append(str(citation.get("locator") or ""), style="dim")
+        metadata = citation.get("metadata")
+        if isinstance(metadata, dict) and citation.get("source_type") == "web_page":
+            text.append(
+                "\n"
+                f"domain={metadata.get('domain')}  trust={metadata.get('trust_level')}  "
+                f"freshness={metadata.get('expiration_state')}  fetched={metadata.get('fetched_at')}",
+                style="dim",
+            )
+    return text
 
 
 def _collect_files(path: Path, recursive: bool) -> list[Path]:

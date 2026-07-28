@@ -24,6 +24,7 @@ from pkb_agent.agent.errors import (
     ToolPermissionDenied,
 )
 from pkb_agent.agent.state import AgentRunState, AgentStatus
+from pkb_agent.agent.verification import AnswerVerifier, Evidence, extract_evidence, refusal_payload
 from pkb_agent.app.settings import Settings, get_settings, load_prompt, permissions_config_path
 from pkb_agent.llm.deepseek_client import DeepSeekClient
 from pkb_agent.llm.schemas import Message, ToolCall
@@ -48,6 +49,10 @@ from pkb_agent.web.search_provider import make_search_provider
 
 EventCallback = Callable[[dict[str, Any]], Awaitable[None] | None]
 
+# DeepSeek JSON Output guarantees JSON syntax for a non-tool completion.  The
+# runtime still validates the required fields and runtime-issued citation IDs.
+_JSON_OBJECT_RESPONSE_FORMAT = {"type": "json_object"}
+
 
 class AgentRuntime:
     """Assembles all collaborators and runs the ReAct loop."""
@@ -70,6 +75,7 @@ class AgentRuntime:
         self.ctx: ToolContext
         self.prompt_composer: PromptComposer | None = None
         self.query_planner: QueryPlanner | None = None
+        self.answer_verifier = AnswerVerifier()
         self._permissions_repo: PermissionsRepository | None = None
         self._last_permission_override_refresh: float | None = None
         self._closables: list[Any] = []
@@ -219,6 +225,8 @@ class AgentRuntime:
                 state.messages,
                 tools=self.registry.to_schemas(),
                 temperature=self.settings.llm_temperature,
+                max_tokens=self.settings.agent_json_output_max_tokens,
+                response_format=_JSON_OBJECT_RESPONSE_FORMAT,
             )
             choice = completion.first
             msg = choice.message
@@ -226,21 +234,18 @@ class AgentRuntime:
             usage = completion.usage or {}
 
             if not msg.tool_calls:
-                # Final answer.
-                state.final_answer = msg.content or ""
-                state.status = AgentStatus.FINISHED
-                await self.ctx.trace.finish_run(
-                    state.run_id,
-                    status="finished",
-                    final_answer=state.final_answer,
-                    step_count=state.step_count,
+                finished = await self._handle_final_response(
+                    state,
+                    content=msg.content,
                     usage=usage,
+                    on_event=on_event,
                 )
-                await _emit(
-                    on_event,
-                    {"type": "answer", "answer": state.final_answer, "steps": state.step_count},
-                )
-                return
+                if finished:
+                    return
+                # The verifier requested a repair. The repair prompt is now in
+                # the conversation and may lead to corrected JSON or more tool
+                # retrieval on the next model turn.
+                continue
 
             thought = msg.content
             for tc in msg.tool_calls:
@@ -249,11 +254,12 @@ class AgentRuntime:
         # Exhausted step budget.
         state.status = AgentStatus.MAX_STEPS
         state.error = f"exceeded max_steps={max_steps}"
-        await self.ctx.trace.finish_run(
-            state.run_id,
-            status="max_steps",
-            error=state.error,
-            step_count=state.step_count,
+        await self._finalize_refusal(
+            state,
+            reason="max_steps",
+            errors=[state.error],
+            on_event=on_event,
+            trace_status="max_steps",
         )
         await _emit(on_event, {"type": "max_steps", "steps": state.step_count})
 
@@ -314,7 +320,6 @@ class AgentRuntime:
             truncated = result.truncated
             if not ok:
                 error = result.error or "tool returned an error"
-            observation_text = result.to_observation(self.settings.agent_tool_result_max_chars)
         except ToolPermissionDenied as e:
             ok = False
             error = str(e)
@@ -332,8 +337,27 @@ class AgentRuntime:
             error = f"{type(e).__name__}: {e}"
             observation_text = _error_observation(error)
 
-        duration_ms = int((time.time() - started) * 1000)
         end_dt = datetime.now(UTC)
+        registered_evidence: list[Evidence] = []
+        if ok:
+            registered_evidence = extract_evidence(
+                tc.name,
+                result_data,
+                settings=self.settings,
+                observed_at=end_dt,
+            )
+            for evidence in registered_evidence:
+                state.evidence[evidence.citation_id] = evidence
+            if registered_evidence:
+                result_data = _attach_citation_evidence(result_data, registered_evidence)
+            observation_text = _data_observation(
+                result_data,
+                max_chars=self.settings.agent_tool_result_max_chars,
+            )
+        elif not observation_text:
+            observation_text = _error_observation(error or "tool returned an error")
+
+        duration_ms = int((time.time() - started) * 1000)
         step.finish(status="ok" if ok else "error", observation=observation_text)
 
         # Trace (fire-and-forget failures are swallowed inside recorder? no — recorder raises on DB error; let it surface)
@@ -378,6 +402,131 @@ class AgentRuntime:
                 "truncated": truncated,
                 "duration_ms": duration_ms,
                 "observation": observation_text,
+                "citation_evidence": [
+                    evidence.to_prompt_dict() for evidence in registered_evidence
+                ],
+            },
+        )
+
+    async def _handle_final_response(
+        self,
+        state: AgentRunState,
+        *,
+        content: str | None,
+        usage: dict[str, Any],
+        on_event: EventCallback | None,
+    ) -> bool:
+        """Validate a model final response, repairing or refusing deterministically.
+
+        Returning ``False`` keeps the ReAct loop alive after a repair prompt so
+        the model may either correct its JSON or obtain additional evidence.
+        """
+        verdict = self.answer_verifier.validate(content, state.evidence)
+        if verdict.valid:
+            assert verdict.payload is not None
+            state.status = AgentStatus.FINISHED
+            state.final_answer = verdict.payload.answer
+            state.answer_payload = verdict.payload.to_dict()
+            state.verification = {
+                "status": "verified"
+                if verdict.payload.status == "grounded"
+                else "insufficient_evidence",
+                "repair_attempts": state.verification_attempts,
+                "evidence_count": len(state.evidence),
+                "cited_evidence_count": len(verdict.payload.citations),
+                "errors": [],
+            }
+            await self.ctx.trace.finish_run(
+                state.run_id,
+                status="finished",
+                final_answer=state.final_answer,
+                answer_payload=state.answer_payload,
+                verification=state.verification,
+                step_count=state.step_count,
+                usage=usage,
+            )
+            await _emit(
+                on_event,
+                {
+                    "type": "answer",
+                    "answer": state.final_answer,
+                    "answer_payload": state.answer_payload,
+                    "verification": state.verification,
+                    "steps": state.step_count,
+                },
+            )
+            return True
+
+        errors = list(verdict.errors) or ["unknown final-answer validation failure"]
+        retry_limit = _answer_verification_retry_limit(self.settings)
+        if state.verification_attempts < retry_limit:
+            state.verification_attempts += 1
+            state.messages.append(
+                Message.user(_answer_repair_instruction(errors, state.evidence.values()))
+            )
+            await _emit(
+                on_event,
+                {
+                    "type": "answer_verification_failed",
+                    "errors": errors,
+                    "retry": state.verification_attempts,
+                    "retry_limit": retry_limit,
+                    "evidence_count": len(state.evidence),
+                },
+            )
+            return False
+
+        state.status = AgentStatus.FINISHED
+        await self._finalize_refusal(
+            state,
+            reason="answer_validation_failed",
+            errors=errors,
+            on_event=on_event,
+            usage=usage,
+            trace_status="finished",
+        )
+        return True
+
+    async def _finalize_refusal(
+        self,
+        state: AgentRunState,
+        *,
+        reason: str,
+        errors: list[str],
+        on_event: EventCallback | None,
+        trace_status: str,
+        usage: dict[str, Any] | None = None,
+    ) -> None:
+        """Persist and emit a clear evidence-boundary refusal."""
+        payload = refusal_payload(_refusal_message(reason))
+        state.final_answer = payload.answer
+        state.answer_payload = payload.to_dict()
+        state.verification = {
+            "status": "refused",
+            "reason": reason,
+            "repair_attempts": state.verification_attempts,
+            "evidence_count": len(state.evidence),
+            "cited_evidence_count": 0,
+            "errors": errors,
+        }
+        await self.ctx.trace.finish_run(
+            state.run_id,
+            status=trace_status,
+            final_answer=state.final_answer,
+            answer_payload=state.answer_payload,
+            verification=state.verification,
+            error=state.error,
+            step_count=state.step_count,
+            usage=usage,
+        )
+        await _emit(
+            on_event,
+            {
+                "type": "answer",
+                "answer": state.final_answer,
+                "answer_payload": state.answer_payload,
+                "verification": state.verification,
+                "steps": state.step_count,
             },
         )
 
@@ -447,6 +596,58 @@ class AgentRuntime:
 
 def _error_observation(error: str) -> str:
     return json.dumps({"error": error}, ensure_ascii=False)
+
+
+def _attach_citation_evidence(data: Any, evidence: list[Evidence]) -> Any:
+    """Expose only runtime-issued IDs to the model in the tool observation."""
+    if not isinstance(data, dict):
+        return data
+    # Put IDs first: long fetched-page text may be truncated before the model
+    # sees the rest of the observation.
+    return {
+        "citation_evidence": [record.to_prompt_dict() for record in evidence],
+        **data,
+    }
+
+
+def _data_observation(data: Any, *, max_chars: int) -> str:
+    try:
+        text = json.dumps(data, ensure_ascii=False, default=str, indent=2)
+    except (TypeError, ValueError):
+        text = str(data)
+    if len(text) > max_chars:
+        return text[: max(max_chars - 20, 0)].rstrip() + "\n…[truncated]"
+    return text
+
+
+def _answer_verification_retry_limit(settings: Settings) -> int:
+    try:
+        return min(max(int(settings.agent_answer_verification_max_retries), 0), 10)
+    except (TypeError, ValueError):
+        return 2
+
+
+def _answer_repair_instruction(errors: list[str], evidence: Any) -> str:
+    """Ask the model to repair the final JSON without weakening the contract."""
+    records = [record.to_prompt_dict() for record in evidence]
+    errors_text = "\n".join(f"- {error}" for error in errors)
+    records_json = json.dumps(records, ensure_ascii=False)
+    return (
+        "Your previous final response was rejected by the answer verifier.\n"
+        "Validation errors:\n"
+        f"{errors_text}\n\n"
+        "Return a replacement that follows the final JSON contract exactly. "
+        "You may cite only IDs in this runtime-issued evidence list:\n"
+        f"{records_json}\n\n"
+        "If these sources are insufficient, either call a retrieval tool for more evidence "
+        "or return the insufficient_evidence JSON shape. Do not explain the repair outside JSON."
+    )
+
+
+def _refusal_message(reason: str) -> str:
+    if reason == "max_steps":
+        return "无法在本轮允许的检索步骤内获得足以支撑回答的证据。"
+    return "无法基于本轮检索到的证据生成可验证回答。"
 
 
 async def _emit(callback: EventCallback | None, event: dict[str, Any]) -> None:

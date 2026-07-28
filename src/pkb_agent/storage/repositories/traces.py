@@ -63,6 +63,8 @@ class TracesRepository:
         *,
         status: str,
         final_answer: str | None = None,
+        answer_payload: dict[str, Any] | None = None,
+        verification: dict[str, Any] | None = None,
         error: str | None = None,
         step_count: int | None = None,
         usage: dict[str, Any] | None = None,
@@ -70,6 +72,10 @@ class TracesRepository:
         fields: dict[str, Any] = {"status": status}
         if final_answer is not None:
             fields["final_answer"] = final_answer
+        if answer_payload is not None:
+            fields["answer_payload"] = answer_payload
+        if verification is not None:
+            fields["verification"] = verification
         if error is not None:
             fields["error"] = error
         if step_count is not None:

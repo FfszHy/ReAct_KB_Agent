@@ -104,6 +104,7 @@ class DeepSeekClient:
         tools: list[dict[str, Any]] | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        response_format: dict[str, Any] | None = None,
         tool_choice: str | dict | None = None,
     ) -> ChatCompletion:
         body = build_chat_request(
@@ -112,6 +113,7 @@ class DeepSeekClient:
             tools=tools,
             temperature=self._model_temperature(temperature),
             max_tokens=max_tokens,
+            response_format=response_format,
             tool_choice=tool_choice,
             stream=False,
         )

@@ -37,6 +37,32 @@ memory directly. It can only call tools. Each tool call passes through:
 parameter validation → permission check → trace recording → execution → result
 truncation → error wrapping.
 
+### Verifiable answers
+
+The final model turn is a machine-checked JSON contract, not free-form prose:
+`answer` + typed `claims` + `citations`. Citation IDs are accepted only when
+they appear in the in-memory evidence ledger built from chunks retrieved during
+the same run. Unknown, stale, or fabricated IDs reject the final response. The
+agent requests DeepSeek JSON Output (`response_format={"type":"json_object"}`)
+with a configurable completion ceiling before applying that validation.
+
+- Each claim is labelled `fact` (source directly states it) or `inference`
+  (the model's conclusion from cited facts), and both require evidence.
+- `answer` remains the complete, user-facing explanation; `claims` are the
+  atomic evidence audit for that explanation, not a replacement summary.
+- A rejected answer gets a bounded repair turn; the agent may retrieve more
+  evidence. If it still cannot provide a valid answer, the runtime returns an
+  explicit `insufficient_evidence` response rather than passing through prose.
+- Web search snippets are never citation-eligible by themselves. A page must
+  be fetched with `web_fetch`; its citation records fetch time, domain, trust
+  tier, expiry state, content hash, and truncation state.
+- The Rich CLI renders **原文事实 / Source facts** and **模型推断 / Model
+  inferences** in separate panels. `pkb-agent ask --json` exposes the complete
+  answer object, cited evidence, and verifier audit for other UIs.
+
+Configure web-page freshness and high-trust domains in `config/default.yaml`
+under `web.evidence_ttl_hours` and `web.trusted_domains`.
+
 ### Prompt lifecycle
 
 Prompt bodies live in `config/prompts/*.md`; their runtime lifecycle is declared
@@ -104,7 +130,9 @@ vectors from different embedding models must not be mixed.
 Apply the migrations under `supabase/migrations/` to your Supabase project (via
 the Supabase dashboard, `supabase db push`, or any SQL client). The migrations
 enable `vector`, create core tables, search functions, trace tables, memory
-tables, permission tables, and RLS policies.
+tables, permission tables, and RLS policies. Migration
+`009_verifiable_answers.sql` adds the canonical answer JSON and verification
+audit columns used by the verifiable-answer flow.
 
 ### 4. Ingest documents
 
