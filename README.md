@@ -32,6 +32,57 @@ CLI User → Typer CLI → DeepSeek ReAct Runtime → Tool Registry + Permission
     agent_steps, tool_calls, task_memory, tool_permissions)
 ```
 
+## Visual workbench
+
+The repository also includes a browser workbench that preserves the existing
+Python Runtime as the source of truth:
+
+```
+Next.js workbench ──HTTP/SSE──> FastAPI boundary ──> permissioned AgentRuntime
+     upload documents                 │                       │
+     inspect citations                │                       ├─ trace + metrics
+     replay Agent Trace               │                       ├─ evidence ledger
+     approve web_fetch/memory_write ──┘                       └─ Supabase
+```
+
+It is deliberately focused on one evidence-first flow:
+
+1. upload a file and ingest it into the default knowledge base;
+2. ask a question;
+3. read a verified answer with clickable citation cards;
+4. open a citation to fetch and highlight its source chunk;
+5. expand retrieval candidates, replay the plan/tool/result timeline, or
+   approve a protected `web_fetch` / `memory_write` step;
+6. inspect end-to-end duration, token usage, estimated cost, and tool/run
+   success rates.
+
+The frontend is in [`web/`](web). Start both development processes after
+configuring the normal runtime secrets:
+
+```bash
+# terminal 1 — FastAPI + SSE (use the existing Conda environment)
+conda activate pkb-agent
+uvicorn pkb_agent.api.main:app --reload --port 8000
+
+# terminal 2 — lightweight Next.js UI
+cd web
+npm install
+npm run dev
+```
+
+Open `http://localhost:3000`. The frontend defaults to the API at
+`http://127.0.0.1:8000`; set `NEXT_PUBLIC_API_URL` only when the API is hosted
+elsewhere. Browser origins and the approval timeout are configured under the
+`api` section in `config/default.yaml`.
+
+Per-run cost is intentionally labelled as an estimate. The default config uses
+the supplied DeepSeek V4 Flash CNY contract: ¥0.02 / 1M cache-hit input,
+¥1.00 / 1M cache-miss input, and ¥2.00 / 1M output. The runtime reads
+DeepSeek's `prompt_cache_hit_tokens` and `prompt_cache_miss_tokens` fields;
+if a compatible endpoint omits them, it conservatively prices that input as a
+cache miss. Update the `observability` rates whenever the model or account
+contract changes.
+
 **Core invariant:** the Agent Runtime never touches Supabase, the network, or
 memory directly. It can only call tools. Each tool call passes through:
 parameter validation → permission check → trace recording → execution → result

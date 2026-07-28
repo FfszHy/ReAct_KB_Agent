@@ -9,7 +9,8 @@ confirmation callback; in non-interactive mode they are denied.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+import inspect
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -40,7 +41,7 @@ class PermissionManager:
         self,
         rules: dict[str, ToolPermissionRule] | None = None,
         blocked_hosts: list[str] | None = None,
-        confirm: Callable[[str, dict[str, Any]], bool] | None = None,
+        confirm: Callable[[str, dict[str, Any]], bool | Awaitable[bool]] | None = None,
     ) -> None:
         self.rules: dict[str, ToolPermissionRule] = rules or {}
         self._overrides: dict[str, ToolPermissionRule] = {}
@@ -122,20 +123,58 @@ class PermissionManager:
         self._overrides = {}
 
     def check(self, tool_name: str, args: dict[str, Any], ctx: ToolContext) -> None:
-        """Raise :class:`ToolPermissionDenied` if the call is not permitted."""
+        """Synchronously validate a tool call.
+
+        This is kept for the CLI and existing integrations. The web workbench
+        uses :meth:`check_async` so a permission prompt can await a human
+        decision without freezing the running event loop.
+        """
+        rule = self._check_rule(tool_name, args)
+        if rule.permission != Permission.ASK:
+            return
+        allowed = False
+        callback = ctx.confirm_callback or self.confirm
+        if callback is not None:
+            try:
+                decision = callback(tool_name, args)
+                # A coroutine cannot be safely awaited by this synchronous
+                # contract; deny rather than accidentally treating it as true.
+                if inspect.isawaitable(decision):
+                    if inspect.iscoroutine(decision):
+                        decision.close()
+                    allowed = False
+                else:
+                    allowed = bool(decision)
+            except Exception:
+                allowed = False
+        if not allowed:
+            raise ToolPermissionDenied(tool_name, "requires confirmation (not granted)")
+
+    async def check_async(self, tool_name: str, args: dict[str, Any], ctx: ToolContext) -> None:
+        """Asynchronously validate a tool call, awaiting human approval when needed."""
+        rule = self._check_rule(tool_name, args)
+        if rule.permission != Permission.ASK:
+            return
+        allowed = False
+        callback = ctx.confirm_callback or self.confirm
+        if callback is not None:
+            try:
+                decision = callback(tool_name, args)
+                if inspect.isawaitable(decision):
+                    decision = await decision
+                allowed = bool(decision)
+            except Exception:
+                allowed = False
+        if not allowed:
+            raise ToolPermissionDenied(tool_name, "requires confirmation (not granted)")
+
+    def _check_rule(self, tool_name: str, args: dict[str, Any]) -> ToolPermissionRule:
+        """Apply non-interactive policy checks and return the active rule."""
         rule = self.rule_for(tool_name)
         if rule.permission == Permission.DENY:
             raise ToolPermissionDenied(tool_name, "denied by policy")
         self._validate_constraints(tool_name, rule, args)
-        if rule.permission == Permission.ASK:
-            allowed = False
-            if ctx.confirm_callback is not None:
-                try:
-                    allowed = bool(ctx.confirm_callback(tool_name, args))
-                except Exception:
-                    allowed = False
-            if not allowed:
-                raise ToolPermissionDenied(tool_name, "requires confirmation (not granted)")
+        return rule
 
     # ------------------------------------------------------------------
     def _validate_constraints(

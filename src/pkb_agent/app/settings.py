@@ -102,6 +102,10 @@ class Settings(BaseSettings):
     supabase_url: str = ""
     supabase_anon_key: str = ""
     supabase_service_role_key: str = ""
+    # Supabase is the local knowledge-base control plane.  Do not silently
+    # inherit an editor/shell proxy (often a stale localhost proxy) unless the
+    # deployment explicitly opts in with ``SUPABASE_TRUST_ENV=true``.
+    supabase_trust_env: bool = False
 
     # Embedding (OpenAI-compatible /embeddings endpoint)
     embedding_api_key: str = ""
@@ -157,6 +161,23 @@ class Settings(BaseSettings):
     # Trace
     trace_enabled: bool = True
     trace_redact_secrets: bool = True
+
+    # Visual workbench API
+    api_allowed_origins: list[str] = Field(
+        default_factory=lambda: ["http://localhost:3000", "http://127.0.0.1:3000"]
+    )
+    api_approval_timeout_seconds: int = Field(default=300, ge=10, le=3600)
+
+    # Observability. Prices are configurable because they are part of the
+    # provider/account contract. DeepSeek exposes cache-hit and cache-miss
+    # token counts separately, so the workbench can price both accurately.
+    observability_currency: str = "USD"
+    # Legacy single input rate. When set, it remains the fallback for an
+    # unclassified input or an API response without cache details.
+    observability_input_token_cost_per_million: float | None = Field(default=None, ge=0)
+    observability_cache_hit_input_token_cost_per_million: float = Field(default=0.0, ge=0)
+    observability_cache_miss_input_token_cost_per_million: float = Field(default=0.0, ge=0)
+    observability_output_token_cost_per_million: float = Field(default=0.0, ge=0)
 
     # ------------------------------------------------------------------
     @classmethod

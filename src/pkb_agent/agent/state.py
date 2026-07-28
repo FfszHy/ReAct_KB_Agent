@@ -86,6 +86,21 @@ class AgentRunState:
     verification_attempts: int = 0
     error: str | None = None
     created_at: datetime = field(default_factory=_now)
+    ended_at: datetime | None = None
+    usage: dict = field(
+        default_factory=lambda: {
+            "prompt_tokens": 0,
+            "prompt_cache_hit_tokens": 0,
+            "prompt_cache_miss_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "estimated_cost": 0.0,
+            "cost_currency": "USD",
+        }
+    )
+    tool_duration_ms: int = 0
+    tool_call_count: int = 0
+    successful_tool_call_count: int = 0
 
     @property
     def step_count(self) -> int:
@@ -95,6 +110,98 @@ class AgentRunState:
         step = AgentStep(index=self.step_count, thought=thought, tool_call=tool_call)
         self.steps.append(step)
         return step
+
+    def add_usage(
+        self,
+        usage: dict | None,
+        *,
+        input_cost_per_million: float | None = None,
+        cache_hit_input_cost_per_million: float = 0.0,
+        cache_miss_input_cost_per_million: float = 0.0,
+        output_cost_per_million: float = 0.0,
+        currency: str = "USD",
+    ) -> None:
+        """Accumulate token accounting and cache-aware provider cost estimates."""
+        raw = usage if isinstance(usage, dict) else {}
+        prompt = _non_negative_int(raw.get("prompt_tokens"))
+        completion = _non_negative_int(raw.get("completion_tokens"))
+        total = _non_negative_int(raw.get("total_tokens"))
+        if total == 0:
+            total = prompt + completion
+        cache_hit = _non_negative_int(raw.get("prompt_cache_hit_tokens"))
+        cache_miss = _non_negative_int(raw.get("prompt_cache_miss_tokens"))
+        # DeepSeek documents prompt_tokens as hit + miss. Older compatible
+        # gateways may omit those details; treat any unclassified input as a
+        # cache miss so the estimate never understates the bill.
+        unclassified = max(prompt - cache_hit - cache_miss, 0)
+        cache_miss += unclassified
+        self.usage["prompt_tokens"] = _non_negative_int(self.usage.get("prompt_tokens")) + prompt
+        self.usage["prompt_cache_hit_tokens"] = (
+            _non_negative_int(self.usage.get("prompt_cache_hit_tokens")) + cache_hit
+        )
+        self.usage["prompt_cache_miss_tokens"] = (
+            _non_negative_int(self.usage.get("prompt_cache_miss_tokens")) + cache_miss
+        )
+        self.usage["completion_tokens"] = (
+            _non_negative_int(self.usage.get("completion_tokens")) + completion
+        )
+        self.usage["total_tokens"] = _non_negative_int(self.usage.get("total_tokens")) + total
+        # A legacy single input rate has precedence as the conservative miss
+        # rate. It keeps existing deployments compatible with this expansion.
+        miss_rate = (
+            max(float(input_cost_per_million), 0.0)
+            if input_cost_per_million is not None
+            else max(float(cache_miss_input_cost_per_million), 0.0)
+        )
+        estimated = (
+            self.usage["prompt_cache_hit_tokens"]
+            * max(float(cache_hit_input_cost_per_million), 0.0)
+            + self.usage["prompt_cache_miss_tokens"] * miss_rate
+            + self.usage["completion_tokens"] * max(float(output_cost_per_million), 0.0)
+        ) / 1_000_000
+        self.usage["estimated_cost"] = round(estimated, 8)
+        self.usage["cost_currency"] = str(currency or "USD").upper()
+
+    def record_tool_call(self, duration_ms: int, *, ok: bool) -> None:
+        self.tool_call_count += 1
+        self.tool_duration_ms += max(int(duration_ms), 0)
+        if ok:
+            self.successful_tool_call_count += 1
+
+    def mark_finished(self) -> None:
+        if self.ended_at is None:
+            self.ended_at = _now()
+        duration_ms = max(int((self.ended_at - self.created_at).total_seconds() * 1000), 0)
+        self.usage["duration_ms"] = duration_ms
+        self.usage["tool_duration_ms"] = self.tool_duration_ms
+        self.usage["tool_call_count"] = self.tool_call_count
+        self.usage["successful_tool_call_count"] = self.successful_tool_call_count
+        self.usage["tool_success_rate"] = (
+            round(self.successful_tool_call_count / self.tool_call_count * 100, 1)
+            if self.tool_call_count
+            else None
+        )
+
+    def metrics(self) -> dict:
+        end = self.ended_at or _now()
+        duration_ms = max(int((end - self.created_at).total_seconds() * 1000), 0)
+        verification_status = str(self.verification.get("status") or "")
+        run_succeeded = self.status == AgentStatus.FINISHED and verification_status == "verified"
+        tool_success_rate = (
+            round(self.successful_tool_call_count / self.tool_call_count * 100, 1)
+            if self.tool_call_count
+            else None
+        )
+        return {
+            "duration_ms": duration_ms,
+            "tool_duration_ms": self.tool_duration_ms,
+            "tool_call_count": self.tool_call_count,
+            "successful_tool_call_count": self.successful_tool_call_count,
+            "tool_success_rate": tool_success_rate,
+            "run_succeeded": run_succeeded,
+            "run_success_rate": 100.0 if run_succeeded else 0.0,
+            "usage": dict(self.usage),
+        }
 
     def to_dict(self) -> dict:
         return {
@@ -107,13 +214,23 @@ class AgentRunState:
             "final_answer": self.final_answer,
             "answer": self.answer_payload,
             "verification": self.verification,
+            "usage": dict(self.usage),
+            "metrics": self.metrics(),
             "retrieved_evidence": [
                 _serialize_evidence(record) for record in self.evidence.values()
             ],
             "error": self.error,
             "created_at": _utc_iso(self.created_at),
+            "ended_at": _utc_iso(self.ended_at) if self.ended_at else None,
         }
 
 
 def _serialize_evidence(record: Evidence) -> dict:
     return record.to_dict()
+
+
+def _non_negative_int(value: object) -> int:
+    try:
+        return max(int(value), 0)
+    except (TypeError, ValueError):
+        return 0

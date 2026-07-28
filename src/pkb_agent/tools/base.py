@@ -10,7 +10,7 @@ runtime does not touch Supabase/network directly (only tools do).
 from __future__ import annotations
 
 import abc
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -57,7 +57,10 @@ class ToolContext:
     services: dict[str, Any] = field(default_factory=dict)
     run_id: str | None = None
     user_id: str | None = None
-    confirm_callback: Callable[[str, dict[str, Any]], bool] | None = None
+    # CLI callers remain synchronous; the FastAPI workbench supplies an async
+    # callback that waits for an explicit browser approval without blocking the
+    # event loop.
+    confirm_callback: Callable[[str, dict[str, Any]], bool | Awaitable[bool]] | None = None
 
     def repo(self, name: str) -> Any:
         if name not in self.repositories:

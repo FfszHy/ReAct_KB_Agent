@@ -53,6 +53,14 @@ class TracesRepository:
         data = self._client.table(_RUNS).select("*").eq("id", run_id).execute().data
         return data[0] if data else None
 
+    def list_runs(
+        self, user_id: str | None = None, limit: int = 50, offset: int = 0
+    ) -> list[dict[str, Any]]:
+        query = self._client.table(_RUNS).select("*").order("created_at", desc=True)
+        if user_id is not None:
+            query = query.eq("user_id", user_id)
+        return query.limit(limit).offset(offset).execute().data or []
+
     def update_run(self, run_id: str, **fields: Any) -> dict[str, Any] | None:
         data = self._client.table(_RUNS).update(fields).eq("id", run_id).execute().data
         return data[0] if data else None
@@ -123,6 +131,17 @@ class TracesRepository:
             raise StorageError(f"add_step failed: {e}") from e
         return data[0] if data else {}
 
+    def list_steps(self, run_id: str) -> list[dict[str, Any]]:
+        return (
+            self._client.table(_STEPS)
+            .select("*")
+            .eq("run_id", run_id)
+            .order("step_index", desc=False)
+            .execute()
+            .data
+            or []
+        )
+
     # -------------------------------------------------------------- tool calls
     def add_tool_call(
         self,
@@ -159,3 +178,14 @@ class TracesRepository:
         except Exception as e:
             raise StorageError(f"add_tool_call failed: {e}") from e
         return data[0] if data else {}
+
+    def list_tool_calls(self, run_id: str) -> list[dict[str, Any]]:
+        return (
+            self._client.table(_TOOLCALLS)
+            .select("*")
+            .eq("run_id", run_id)
+            .order("step_index", desc=False)
+            .execute()
+            .data
+            or []
+        )

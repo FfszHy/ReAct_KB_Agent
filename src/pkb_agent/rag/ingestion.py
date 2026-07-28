@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
@@ -32,11 +33,37 @@ def _extract_pdf_text(path: Path) -> str:
     return "\n\n".join(parts)
 
 
+def _extract_pdf_bytes(content: bytes) -> str:
+    """Extract text from an uploaded PDF without materialising it on disk."""
+    from pypdf import PdfReader
+
+    reader = PdfReader(BytesIO(content))
+    parts: list[str] = []
+    for page in reader.pages:
+        text = page.extract_text() or ""
+        if text.strip():
+            parts.append(text)
+    return "\n\n".join(parts)
+
+
 def read_file_text(path: Path) -> str:
     """Read text content from a file, dispatching by extension."""
     if path.suffix.lower() == ".pdf":
         return _extract_pdf_text(path)
     return path.read_text("utf-8")
+
+
+def read_upload_text(content: bytes, filename: str | None = None) -> str:
+    """Decode a browser upload into ingestible text.
+
+    PDF extraction shares the same parser as CLI ingestion. Text files are
+    decoded as UTF-8 with replacement so an individual malformed byte does not
+    discard an otherwise useful source; binary formats remain unsupported.
+    """
+    suffix = Path(filename or "upload.txt").suffix.lower()
+    if suffix == ".pdf":
+        return _extract_pdf_bytes(content)
+    return content.decode("utf-8", errors="replace")
 
 
 def _content_hash(text: str) -> str:
@@ -170,4 +197,23 @@ class IngestionPipeline:
             kwargs["title"] = p.stem
         kwargs.setdefault("source_uri", str(p))
         kwargs.setdefault("source_type", "file")
+        return await self.ingest_text(text, **kwargs)
+
+    async def ingest_upload(
+        self,
+        content: bytes,
+        *,
+        filename: str | None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Ingest an uploaded file while retaining source/version metadata."""
+        text = await asyncio.to_thread(read_upload_text, content, filename)
+        if not kwargs.get("title"):
+            kwargs["title"] = Path(filename or "Untitled upload").stem or "Untitled upload"
+        kwargs.setdefault("source_uri", f"upload://{filename or 'untitled'}")
+        kwargs.setdefault("source_type", "file")
+        metadata = dict(kwargs.pop("meta", {}) or {})
+        metadata.setdefault("source_status", "ready")
+        metadata.setdefault("uploaded_filename", filename or "untitled")
+        kwargs["meta"] = metadata
         return await self.ingest_text(text, **kwargs)

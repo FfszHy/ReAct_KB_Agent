@@ -12,6 +12,7 @@ license = { text = "MIT" }
 authors = [{ name = "pkb-agent" }]
 
 dependencies = [
+  "fastapi>=0.115",
   "typer>=0.12.3",
   "rich>=13.7",
   "pydantic>=2.7",
@@ -25,7 +26,9 @@ dependencies = [
   "tiktoken>=0.7",
   "PyYAML>=6.0",
   "python-dotenv>=1.0",
+  "python-multipart>=0.0.9",
   "pypdf>=4.0",
+  "uvicorn[standard]>=0.30",
 ]
 
 [project.optional-dependencies]

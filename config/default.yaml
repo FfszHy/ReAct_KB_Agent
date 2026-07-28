@@ -64,3 +64,23 @@ permissions:
 trace:
   enabled: true
   redact_secrets: true
+
+# FastAPI workbench. The browser subscribes to a run with SSE and is the only
+# place an `ask`-permission tool can be approved.
+api:
+  allowed_origins: [http://localhost:3000, http://127.0.0.1:3000]
+  approval_timeout_seconds: 300
+
+# Avoid accidentally routing database requests through a stale shell/editor
+# proxy such as 127.0.0.1:7897. Set true only when Supabase must use a proxy.
+supabase:
+  trust_env: false
+
+# Cost is an estimate, not a provider invoice. These are the DeepSeek V4 Flash
+# CNY rates supplied for this workspace, in CNY per one million tokens. Change
+# them whenever the model or account contract changes.
+observability:
+  currency: CNY
+  cache_hit_input_token_cost_per_million: 0.02
+  cache_miss_input_token_cost_per_million: 1.0
+  output_token_cost_per_million: 2.0

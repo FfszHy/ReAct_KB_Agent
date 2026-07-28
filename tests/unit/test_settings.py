@@ -40,6 +40,16 @@ def test_yaml_web_evidence_policy_maps_to_settings(monkeypatch, tmp_path):
     assert settings.agent_json_output_max_tokens == 8192
 
 
+def test_yaml_supabase_proxy_policy_maps_to_settings(monkeypatch, tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("supabase:\n  trust_env: true\n", "utf-8")
+    monkeypatch.setenv("PKB_CONFIG_PATH", str(config_path))
+
+    settings = Settings(_env_file=None)
+
+    assert settings.supabase_trust_env is True
+
+
 def test_deepseek_temperature_environment_override_takes_precedence(monkeypatch):
     monkeypatch.setenv("DEEPSEEK_TEMPERATURE", "0.11")
 

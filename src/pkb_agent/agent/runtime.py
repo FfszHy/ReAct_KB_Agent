@@ -62,7 +62,7 @@ class AgentRuntime:
         settings: Settings,
         *,
         user_id: str = "default",
-        confirm: Callable[[str, dict[str, Any]], bool] | None = None,
+        confirm: Callable[[str, dict[str, Any]], bool | Awaitable[bool]] | None = None,
     ) -> None:
         self.settings = settings
         self._user_id = user_id
@@ -88,7 +88,7 @@ class AgentRuntime:
         settings: Settings | None = None,
         *,
         user_id: str = "default",
-        confirm: Callable[[str, dict[str, Any]], bool] | None = None,
+        confirm: Callable[[str, dict[str, Any]], bool | Awaitable[bool]] | None = None,
     ) -> AgentRuntime:
         rt = cls(settings or get_settings(), user_id=user_id, confirm=confirm)
         rt._assemble()
@@ -149,7 +149,7 @@ class AgentRuntime:
             user_id=self._user_id,
             confirm_callback=self._confirm,
         )
-        self._closables = [embedder, self.llm, search_provider, fetcher]
+        self._closables = [sb, embedder, self.llm, search_provider, fetcher]
         self._assembled = True
 
     # ------------------------------------------------------------------
@@ -179,13 +179,14 @@ class AgentRuntime:
         *,
         user_id: str | None = None,
         on_event: EventCallback | None = None,
+        run_id: str | None = None,
     ) -> AgentRunState:
         if not self._assembled:
             raise AgentError("runtime not assembled; call AgentRuntime.build()")
         uid = user_id or self._user_id or "default"
         self.ctx.user_id = uid
 
-        state = AgentRunState(question=question)
+        state = AgentRunState(run_id=run_id, question=question) if run_id else AgentRunState(question=question)
         self.ctx.run_id = state.run_id
 
         composition = self._compose_system_prompt()
@@ -207,11 +208,13 @@ class AgentRuntime:
         except Exception as e:
             state.status = AgentStatus.ERROR
             state.error = f"{type(e).__name__}: {e}"
+            state.mark_finished()
             await self.ctx.trace.finish_run(
                 state.run_id,
                 status="error",
                 error=state.error,
                 step_count=state.step_count,
+                usage=state.usage,
             )
             await _emit(on_event, {"type": "error", "error": state.error})
             raise
@@ -232,6 +235,18 @@ class AgentRuntime:
             msg = choice.message
             state.messages.append(msg)
             usage = completion.usage or {}
+            state.add_usage(
+                usage,
+                input_cost_per_million=self.settings.observability_input_token_cost_per_million,
+                cache_hit_input_cost_per_million=(
+                    self.settings.observability_cache_hit_input_token_cost_per_million
+                ),
+                cache_miss_input_cost_per_million=(
+                    self.settings.observability_cache_miss_input_token_cost_per_million
+                ),
+                output_cost_per_million=self.settings.observability_output_token_cost_per_million,
+                currency=self.settings.observability_currency,
+            )
 
             if not msg.tool_calls:
                 finished = await self._handle_final_response(
@@ -248,8 +263,14 @@ class AgentRuntime:
                 continue
 
             thought = msg.content
-            for tc in msg.tool_calls:
-                await self._execute_tool_call(state, tc, thought, on_event)
+            for tool_position, tc in enumerate(msg.tool_calls):
+                await self._execute_tool_call(
+                    state,
+                    tc,
+                    thought,
+                    on_event,
+                    emit_plan=bool(thought) and tool_position == 0,
+                )
 
         # Exhausted step budget.
         state.status = AgentStatus.MAX_STEPS
@@ -270,6 +291,8 @@ class AgentRuntime:
         tc: ToolCall,
         thought: str | None,
         on_event: EventCallback | None,
+        *,
+        emit_plan: bool = False,
     ) -> None:
         step = state.add_step(thought=thought, tool_call=tc)
         started = time.time()
@@ -297,6 +320,16 @@ class AgentRuntime:
         await self._refresh_permission_overrides(on_event)
         permission_source = self.permissions.rule_source_for(tc.name)
 
+        if emit_plan:
+            await _emit(
+                on_event,
+                {
+                    "type": "plan",
+                    "step": step.index,
+                    "thought": thought,
+                },
+            )
+
         await _emit(
             on_event,
             {
@@ -305,6 +338,7 @@ class AgentRuntime:
                 "tool": tc.name,
                 "args": execution_args,
                 "original_args": original_tool_args,
+                "thought": thought,
                 "prompt_context": prompt_context,
                 "permission_source": permission_source,
             },
@@ -313,7 +347,7 @@ class AgentRuntime:
         try:
             tool = self.registry.require(tc.name)
             tool.validate_args(execution_args)
-            self.permissions.check(tc.name, execution_args, self.ctx)
+            await self.permissions.check_async(tc.name, execution_args, self.ctx)
             result = await tool.execute(self.ctx, execution_args)
             ok = result.ok
             result_data = result.data
@@ -359,6 +393,7 @@ class AgentRuntime:
 
         duration_ms = int((time.time() - started) * 1000)
         step.finish(status="ok" if ok else "error", observation=observation_text)
+        state.record_tool_call(duration_ms, ok=ok)
 
         # Trace (fire-and-forget failures are swallowed inside recorder? no — recorder raises on DB error; let it surface)
         await self.ctx.trace.add_step(
@@ -405,6 +440,7 @@ class AgentRuntime:
                 "citation_evidence": [
                     evidence.to_prompt_dict() for evidence in registered_evidence
                 ],
+                "metrics": state.metrics(),
             },
         )
 
@@ -436,6 +472,7 @@ class AgentRuntime:
                 "cited_evidence_count": len(verdict.payload.citations),
                 "errors": [],
             }
+            state.mark_finished()
             await self.ctx.trace.finish_run(
                 state.run_id,
                 status="finished",
@@ -443,7 +480,7 @@ class AgentRuntime:
                 answer_payload=state.answer_payload,
                 verification=state.verification,
                 step_count=state.step_count,
-                usage=usage,
+                usage=state.usage,
             )
             await _emit(
                 on_event,
@@ -453,6 +490,7 @@ class AgentRuntime:
                     "answer_payload": state.answer_payload,
                     "verification": state.verification,
                     "steps": state.step_count,
+                    "metrics": state.metrics(),
                 },
             )
             return True
@@ -509,6 +547,7 @@ class AgentRuntime:
             "cited_evidence_count": 0,
             "errors": errors,
         }
+        state.mark_finished()
         await self.ctx.trace.finish_run(
             state.run_id,
             status=trace_status,
@@ -517,7 +556,7 @@ class AgentRuntime:
             verification=state.verification,
             error=state.error,
             step_count=state.step_count,
-            usage=usage,
+            usage=state.usage,
         )
         await _emit(
             on_event,
@@ -527,6 +566,7 @@ class AgentRuntime:
                 "answer_payload": state.answer_payload,
                 "verification": state.verification,
                 "steps": state.step_count,
+                "metrics": state.metrics(),
             },
         )
 

@@ -124,6 +124,7 @@ def ingest(
                     console.print(f"  [red]failed:[/red] {type(e).__name__}: {e}")
         finally:
             await embedder.close()
+            sb.close()
 
     asyncio.run(_run())
 
@@ -154,8 +155,11 @@ def doctor() -> None:
             from pkb_agent.storage.supabase_client import SupabaseClient
 
             sb = SupabaseClient.from_settings(settings)
-            sb.client.table("documents").select("id").limit(1).execute()
-            _check("Supabase connectivity", True)
+            try:
+                sb.client.table("documents").select("id").limit(1).execute()
+                _check("Supabase connectivity", True)
+            finally:
+                sb.close()
         except Exception as e:
             _check(f"Supabase connectivity ({e})", False)
 
