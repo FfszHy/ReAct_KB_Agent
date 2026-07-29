@@ -94,8 +94,12 @@ class AgentRunState:
             "prompt_cache_miss_tokens": 0,
             "completion_tokens": 0,
             "total_tokens": 0,
-            "estimated_cost": 0.0,
+            # This is calculated only from usage returned by completed model
+            # requests. It is not a pre-run forecast.
+            "actual_cost": 0.0,
             "cost_currency": "USD",
+            "cost_status": "accruing",
+            "cost_source": "completed_api_usage",
         }
     )
     tool_duration_ms: int = 0
@@ -121,7 +125,12 @@ class AgentRunState:
         output_cost_per_million: float = 0.0,
         currency: str = "USD",
     ) -> None:
-        """Accumulate token accounting and cache-aware provider cost estimates."""
+        """Accumulate returned usage and its cache-aware contract cost.
+
+        Every value comes from a completed provider response. The total becomes
+        final when :meth:`mark_finished` changes ``cost_status`` to
+        ``settled``; the UI deliberately does not present it as a prediction.
+        """
         raw = usage if isinstance(usage, dict) else {}
         prompt = _non_negative_int(raw.get("prompt_tokens"))
         completion = _non_negative_int(raw.get("completion_tokens"))
@@ -132,7 +141,8 @@ class AgentRunState:
         cache_miss = _non_negative_int(raw.get("prompt_cache_miss_tokens"))
         # DeepSeek documents prompt_tokens as hit + miss. Older compatible
         # gateways may omit those details; treat any unclassified input as a
-        # cache miss so the estimate never understates the bill.
+        # cache miss so the completed-usage calculation never understates the
+        # contractual bill.
         unclassified = max(prompt - cache_hit - cache_miss, 0)
         cache_miss += unclassified
         self.usage["prompt_tokens"] = _non_negative_int(self.usage.get("prompt_tokens")) + prompt
@@ -153,14 +163,16 @@ class AgentRunState:
             if input_cost_per_million is not None
             else max(float(cache_miss_input_cost_per_million), 0.0)
         )
-        estimated = (
+        actual_cost = (
             self.usage["prompt_cache_hit_tokens"]
             * max(float(cache_hit_input_cost_per_million), 0.0)
             + self.usage["prompt_cache_miss_tokens"] * miss_rate
             + self.usage["completion_tokens"] * max(float(output_cost_per_million), 0.0)
         ) / 1_000_000
-        self.usage["estimated_cost"] = round(estimated, 8)
+        self.usage["actual_cost"] = round(actual_cost, 8)
         self.usage["cost_currency"] = str(currency or "USD").upper()
+        self.usage["cost_status"] = "accruing"
+        self.usage["cost_source"] = "completed_api_usage"
 
     def record_tool_call(self, duration_ms: int, *, ok: bool) -> None:
         self.tool_call_count += 1
@@ -181,6 +193,7 @@ class AgentRunState:
             if self.tool_call_count
             else None
         )
+        self.usage["cost_status"] = "settled"
 
     def metrics(self) -> dict:
         end = self.ended_at or _now()

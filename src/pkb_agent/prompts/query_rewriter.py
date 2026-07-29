@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from pkb_agent.llm.deepseek_client import DeepSeekClient
@@ -25,6 +25,10 @@ class QueryPlan:
     status: str
     prompt_context: dict[str, Any] = field(default_factory=dict)
     fallback_reason: str | None = None
+    # Filled only for the call that actually asked the model. A cached plan
+    # deliberately returns an empty usage payload so a repeated retrieval does
+    # not charge the same completion twice in run accounting.
+    usage: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     def apply_to_arguments(self, arguments: dict[str, Any]) -> dict[str, Any]:
         """Return executable tool arguments without mutating the model output."""
@@ -81,7 +85,7 @@ class QueryPlanner:
         cache_key = (tool_name, original, question)
         cached = self._cache.get(cache_key)
         if cached is not None:
-            return cached
+            return replace(cached, usage={})
 
         prompt_context = composition.trace_context()
         system_prompt = (
@@ -102,6 +106,7 @@ class QueryPlanner:
                 temperature=0.0,
                 max_tokens=240,
             )
+            usage = dict(completion.usage or {})
             content = completion.first.message.content or ""
             queries = _parse_queries(content, self._max_queries)
             if not queries:
@@ -111,9 +116,16 @@ class QueryPlanner:
                     "fallback",
                     prompt_context,
                     "invalid_model_output",
+                    usage,
                 )
             else:
-                plan = QueryPlan(original, tuple(queries), "applied", prompt_context)
+                plan = QueryPlan(
+                    original,
+                    tuple(queries),
+                    "applied",
+                    prompt_context,
+                    usage=usage,
+                )
         except Exception as exc:
             plan = QueryPlan(
                 original,

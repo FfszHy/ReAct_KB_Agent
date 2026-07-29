@@ -125,6 +125,18 @@ class _RewriteStub:
         )
 
 
+class _UsageRewriteStub(_RewriteStub):
+    async def rewrite(self, *, tool_name: str, query: str, question: str = "") -> QueryPlan:
+        plan = await super().rewrite(tool_name=tool_name, query=query, question=question)
+        return QueryPlan(
+            original_query=plan.original_query,
+            queries=plan.queries,
+            status=plan.status,
+            prompt_context=plan.prompt_context,
+            usage={"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6},
+        )
+
+
 class _PassthroughAnswerVerifier:
     """Keeps legacy loop tests focused on orchestration, not answer contracts."""
 
@@ -495,6 +507,22 @@ async def test_run_rewrites_retrieval_arguments_and_traces_both_versions():
     assert trace_kwargs["original_arguments"] == {"query": "What did we decide about auth?"}
     assert trace_kwargs["arguments"] == state.steps[0].execution_arguments
     assert trace_kwargs["prompt_context"]["prompts"][0]["id"] == "query_rewrite"
+
+
+async def test_run_cost_includes_query_rewrite_model_usage():
+    tool = _RecordingRagTool()
+    tc = ToolCall(id="tc1", name="rag_search", arguments={"query": "auth architecture"})
+    rt = _make_runtime(
+        llm_side_effect=[_tool_completion("search", tc), _answer_completion("done")],
+        tools=[tool],
+    )
+    rt.query_planner = _UsageRewriteStub()  # type: ignore[assignment]
+
+    state = await rt.run("What authentication approach should we use?")
+
+    assert state.usage["prompt_tokens"] == 14
+    assert state.usage["completion_tokens"] == 7
+    assert state.usage["total_tokens"] == 21
 
 
 async def test_run_repairs_invalid_citations_against_this_runs_evidence_ledger():

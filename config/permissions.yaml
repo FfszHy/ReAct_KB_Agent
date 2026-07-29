@@ -22,7 +22,7 @@ tools:
   memory_search:
     permission: allow
   memory_write:
-    permission: ask
+    permission: allow
     constraints:
       max_content_chars: 4000
   web_search:

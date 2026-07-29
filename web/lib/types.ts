@@ -27,8 +27,13 @@ export type Usage = {
   prompt_cache_miss_tokens?: number;
   completion_tokens?: number;
   total_tokens?: number;
+  /** Cost calculated from usage returned by completed model requests. */
+  actual_cost?: number;
+  /** Backward-compatible read support for runs recorded before actual_cost. */
   estimated_cost?: number;
   cost_currency?: string;
+  cost_status?: "accruing" | "settled" | string;
+  cost_source?: "completed_api_usage" | string;
 };
 
 export type RunMetrics = {
@@ -78,6 +83,7 @@ export type Approval = {
 
 export type StreamEvent = {
   type: string;
+  status?: string;
   sequence?: number;
   emitted_at?: string;
   step?: number;

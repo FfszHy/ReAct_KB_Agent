@@ -221,7 +221,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/metrics")
     async def metrics(request: Request, user_id: str = "default") -> dict[str, Any]:
-        """Return a compact rolling success/cost view plus local live snapshots."""
+        """Return compact rolling success/cost data plus local live snapshots."""
         rows: list[dict[str, Any]] = []
         try:
             with _traces_repo(runtime_settings) as repo:
@@ -233,12 +233,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         persisted = [_serialize_run(row) for row in rows]
         successes = [item for item in persisted if item["metrics"]["run_succeeded"]]
-        estimated_cost = sum(_usage_cost(item["metrics"]["usage"]) for item in persisted)
+        actual_cost = sum(_usage_cost(item["metrics"]["usage"]) for item in persisted)
         live = await _store(request).recent_snapshots(user_id=user_id)
         return {
             "run_count": len(persisted),
             "success_rate": round(len(successes) / len(persisted) * 100, 1) if persisted else None,
-            "estimated_cost": round(estimated_cost, 8),
+            "actual_cost": round(actual_cost, 8),
             "cost_currency": runtime_settings.observability_currency.upper(),
             "live_runs": live,
         }
@@ -352,9 +352,12 @@ def _serialize_run(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _usage_cost(usage: dict[str, Any]) -> float:
-    """Read new generic cost records and pre-workbench USD records safely."""
+    """Read completed-usage cost records and legacy records safely."""
     try:
-        return float(usage.get("estimated_cost", usage.get("estimated_cost_usd", 0)) or 0)
+        return float(
+            usage.get("actual_cost", usage.get("estimated_cost", usage.get("estimated_cost_usd", 0)))
+            or 0
+        )
     except (TypeError, ValueError):
         return 0.0
 

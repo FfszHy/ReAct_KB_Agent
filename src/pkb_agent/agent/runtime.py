@@ -235,18 +235,7 @@ class AgentRuntime:
             msg = choice.message
             state.messages.append(msg)
             usage = completion.usage or {}
-            state.add_usage(
-                usage,
-                input_cost_per_million=self.settings.observability_input_token_cost_per_million,
-                cache_hit_input_cost_per_million=(
-                    self.settings.observability_cache_hit_input_token_cost_per_million
-                ),
-                cache_miss_input_cost_per_million=(
-                    self.settings.observability_cache_miss_input_token_cost_per_million
-                ),
-                output_cost_per_million=self.settings.observability_output_token_cost_per_million,
-                currency=self.settings.observability_currency,
-            )
+            self._record_usage(state, usage)
 
             if not msg.tool_calls:
                 finished = await self._handle_final_response(
@@ -311,6 +300,7 @@ class AgentRuntime:
                 query=execution_args["query"],
                 question=state.question,
             )
+            self._record_usage(state, plan.usage)
             execution_args = plan.apply_to_arguments(execution_args)
             prompt_context = plan.trace_context()
 
@@ -579,6 +569,21 @@ class AgentRuntime:
             content=load_prompt("system_react"),
             phase="system",
             manifest_version="legacy",
+        )
+
+    def _record_usage(self, state: AgentRunState, usage: dict[str, Any] | None) -> None:
+        """Accumulate every completed model call into the run's final cost."""
+        state.add_usage(
+            usage,
+            input_cost_per_million=self.settings.observability_input_token_cost_per_million,
+            cache_hit_input_cost_per_million=(
+                self.settings.observability_cache_hit_input_token_cost_per_million
+            ),
+            cache_miss_input_cost_per_million=(
+                self.settings.observability_cache_miss_input_token_cost_per_million
+            ),
+            output_cost_per_million=self.settings.observability_output_token_cost_per_million,
+            currency=self.settings.observability_currency,
         )
 
     async def _refresh_permission_overrides(self, on_event: EventCallback | None) -> None:

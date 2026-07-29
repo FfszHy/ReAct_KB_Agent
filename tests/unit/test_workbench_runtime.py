@@ -106,7 +106,8 @@ def test_run_state_accumulates_full_run_usage_and_metrics():
 
     metrics = state.metrics()
     assert metrics["usage"]["total_tokens"] == 185
-    assert metrics["usage"]["estimated_cost"] == pytest.approx(0.00058)
+    assert metrics["usage"]["actual_cost"] == pytest.approx(0.00058)
+    assert metrics["usage"]["cost_status"] == "settled"
     assert metrics["tool_success_rate"] == 50.0
     assert metrics["run_succeeded"] is True
     assert state.usage["duration_ms"] == metrics["duration_ms"]
@@ -131,7 +132,7 @@ def test_run_state_uses_deepseek_cache_hit_and_miss_rates():
     assert state.usage["prompt_cache_hit_tokens"] == 80
     assert state.usage["prompt_cache_miss_tokens"] == 20
     assert state.usage["cost_currency"] == "CNY"
-    assert state.usage["estimated_cost"] == pytest.approx(0.0000416)
+    assert state.usage["actual_cost"] == pytest.approx(0.0000416)
 
 
 def test_fastapi_workbench_health_contract_is_available_without_runtime_secrets():

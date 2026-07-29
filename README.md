@@ -53,7 +53,7 @@ It is deliberately focused on one evidence-first flow:
 4. open a citation to fetch and highlight its source chunk;
 5. expand retrieval candidates, replay the plan/tool/result timeline, or
    approve a protected `web_fetch` / `memory_write` step;
-6. inspect end-to-end duration, token usage, estimated cost, and tool/run
+6. inspect end-to-end duration, token usage, completed-usage cost, and tool/run
    success rates.
 
 The frontend is in [`web/`](web). Start both development processes after
@@ -75,13 +75,14 @@ Open `http://localhost:3000`. The frontend defaults to the API at
 elsewhere. Browser origins and the approval timeout are configured under the
 `api` section in `config/default.yaml`.
 
-Per-run cost is intentionally labelled as an estimate. The default config uses
-the supplied DeepSeek V4 Flash CNY contract: ¥0.02 / 1M cache-hit input,
-¥1.00 / 1M cache-miss input, and ¥2.00 / 1M output. The runtime reads
-DeepSeek's `prompt_cache_hit_tokens` and `prompt_cache_miss_tokens` fields;
-if a compatible endpoint omits them, it conservatively prices that input as a
-cache miss. Update the `observability` rates whenever the model or account
-contract changes.
+Per-run cost is a completed-usage calculation, shown only after the task has
+ended rather than as a pre-run prediction. The default config uses the supplied
+DeepSeek V4 Flash CNY contract: ¥0.02 / 1M cache-hit input, ¥1.00 / 1M
+cache-miss input, and ¥2.00 / 1M output. The runtime reads DeepSeek's
+`prompt_cache_hit_tokens` and `prompt_cache_miss_tokens` fields; if a
+compatible endpoint omits them, it conservatively prices that input as a cache
+miss. Update the `observability` rates whenever the model or account contract
+changes.
 
 **Core invariant:** the Agent Runtime never touches Supabase, the network, or
 memory directly. It can only call tools. Each tool call passes through:

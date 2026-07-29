@@ -11,8 +11,9 @@ from pkb_agent.prompts.query_rewriter import QueryPlanner
 
 
 class _FakeLlm:
-    def __init__(self, content: str) -> None:
+    def __init__(self, content: str, usage: dict | None = None) -> None:
         self.content = content
+        self.usage = usage or {}
         self.calls: list[dict] = []
 
     async def chat(self, messages, **kwargs):
@@ -27,6 +28,7 @@ class _FakeLlm:
                     finish_reason="stop",
                 )
             ],
+            usage=self.usage,
         )
 
 
@@ -127,7 +129,7 @@ async def test_query_planner_falls_back_and_caches_invalid_model_response():
             manifest_path=root / "config" / "prompts" / "manifest.yaml",
         )
     )
-    llm = _FakeLlm("this is not JSON")
+    llm = _FakeLlm("this is not JSON", usage={"prompt_tokens": 12, "completion_tokens": 3})
     planner = QueryPlanner(llm, composer)
 
     first = await planner.rewrite(tool_name="web_search", query="fresh news", question="news")
@@ -135,7 +137,9 @@ async def test_query_planner_falls_back_and_caches_invalid_model_response():
 
     assert first.status == "fallback"
     assert first.queries == ("fresh news",)
-    assert second is first
+    assert first.usage == {"prompt_tokens": 12, "completion_tokens": 3}
+    assert second.usage == {}
+    assert second is not first
     assert len(llm.calls) == 1
 
 
