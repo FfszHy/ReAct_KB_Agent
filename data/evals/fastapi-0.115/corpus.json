@@ -1,0 +1,68 @@
+{
+  "id": "fastapi-0.115",
+  "title": "FastAPI 0.115 technical documentation slice",
+  "revision": "0.115.0",
+  "source_repository": "https://github.com/fastapi/fastapi",
+  "documents": [
+    {
+      "key": "tutorial/path-params",
+      "title": "Path Parameters",
+      "source_url": "https://raw.githubusercontent.com/fastapi/fastapi/0.115.0/docs/en/docs/tutorial/path-params.md",
+      "sha256": "0ca9040f49e5da8d04edc46431879ca49902cb1ae89892f9a50395c7f3f818ed"
+    },
+    {
+      "key": "tutorial/query-params",
+      "title": "Query Parameters",
+      "source_url": "https://raw.githubusercontent.com/fastapi/fastapi/0.115.0/docs/en/docs/tutorial/query-params.md",
+      "sha256": "d3d1f33349ed3d5a6028a74769af0d8e46cd6ae313167276c348b291fbabe45d"
+    },
+    {
+      "key": "tutorial/body",
+      "title": "Request Body",
+      "source_url": "https://raw.githubusercontent.com/fastapi/fastapi/0.115.0/docs/en/docs/tutorial/body.md",
+      "sha256": "2af724e8958770d2a78f309e184dc51f74172a9361e65472c9010c93ceea95c6"
+    },
+    {
+      "key": "tutorial/dependencies",
+      "title": "Dependencies",
+      "source_url": "https://raw.githubusercontent.com/fastapi/fastapi/0.115.0/docs/en/docs/tutorial/dependencies/index.md",
+      "sha256": "2006b0ac81e499dd8c5326091d8d52bd386219335645d4ced91b7cd704ab12b0"
+    },
+    {
+      "key": "tutorial/handling-errors",
+      "title": "Handling Errors",
+      "source_url": "https://raw.githubusercontent.com/fastapi/fastapi/0.115.0/docs/en/docs/tutorial/handling-errors.md",
+      "sha256": "c57831b072e8659455a862097df32cab409a41d6f82e757d70f4c73f92069d89"
+    },
+    {
+      "key": "tutorial/cors",
+      "title": "CORS (Cross-Origin Resource Sharing)",
+      "source_url": "https://raw.githubusercontent.com/fastapi/fastapi/0.115.0/docs/en/docs/tutorial/cors.md",
+      "sha256": "8ef62d49193d8cce86697211badd2a71e720b3d56cdde6266c516f432c152b76"
+    },
+    {
+      "key": "tutorial/security-first-steps",
+      "title": "Security - First Steps",
+      "source_url": "https://raw.githubusercontent.com/fastapi/fastapi/0.115.0/docs/en/docs/tutorial/security/first-steps.md",
+      "sha256": "ad0d94e12e4918e14bd81fe92d80a0d8871ef1c5f9369dfec85c1ba2a99045ad"
+    },
+    {
+      "key": "tutorial/security-oauth2-jwt",
+      "title": "OAuth2 with Password and JWT",
+      "source_url": "https://raw.githubusercontent.com/fastapi/fastapi/0.115.0/docs/en/docs/tutorial/security/oauth2-jwt.md",
+      "sha256": "8a578875a643b38c33d48acd40898b365b320a4937816bf5095664985632d583"
+    },
+    {
+      "key": "tutorial/response-model",
+      "title": "Response Model - Return Type",
+      "source_url": "https://raw.githubusercontent.com/fastapi/fastapi/0.115.0/docs/en/docs/tutorial/response-model.md",
+      "sha256": "17cbf8c0d800f42d9628014ac5d94c72654bdad98fc02bef94259f8048465ab4"
+    },
+    {
+      "key": "deployment/manually",
+      "title": "Run a Server Manually",
+      "source_url": "https://raw.githubusercontent.com/fastapi/fastapi/0.115.0/docs/en/docs/deployment/manually.md",
+      "sha256": "df206ec7130f72ff9268dc880ea510a435b576e741fb9f4453741172db30f389"
+    }
+  ]
+}

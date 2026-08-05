@@ -143,6 +143,10 @@ class Settings(BaseSettings):
     rag_vector_weight: float = 0.6
     rag_fts_weight: float = 0.4
 
+    # Evaluation: retrieval first obtains a wider chunk candidate set, then
+    # collapses duplicate source documents for document-level Recall/MRR/NDCG.
+    evaluation_document_candidate_multiplier: int = Field(default=3, ge=1, le=20)
+
     # Memory
     memory_max_results: int = 5
     memory_default_scope: str = "long"

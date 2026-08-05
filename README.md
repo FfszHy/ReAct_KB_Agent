@@ -5,6 +5,56 @@ reasons in a Thought → Action → Observation loop and interacts with the worl
 **only** through a permissioned, traced tool layer. There is no direct database
 or network access from the runtime itself.
 
+## Evaluation-driven RAG optimization
+
+This is not a feature-only RAG demo. The repository contains a reproducible
+benchmark, a four-stage retrieval ablation, raw per-question records, and a
+human-review sheet for answer grounding. The first public corpus is a pinned
+FastAPI `0.115.0` documentation slice with exact SHA-256 source hashes, 50
+development questions, and a separate frozen 30-question test split (22
+answerable + 8 refusal cases).
+
+![Frozen FastAPI retrieval ablation](data/evals/fastapi-0.115/results/retrieval-test-r2-2026-08-05/comparison.svg)
+
+Frozen-test retrieval run (one pass per 30 test questions, document-level
+@6; see the [raw records](data/evals/fastapi-0.115/results/retrieval-test-r2-2026-08-05/records.jsonl)
+and [report](data/evals/fastapi-0.115/results/retrieval-test-r2-2026-08-05/report.md)):
+
+| Strategy | Recall@6 | MRR@6 | NDCG@6 | p95 latency | Known LLM cost | Failure rate |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Vector only | 1.000 | 0.924 | 0.940 | 3.86 s | — | 0.0% |
+| Vector + normalized FTS | 1.000 | **0.977** | **0.978** | 3.47 s | — | 0.0% |
+| RRF | 0.955 | 0.932 | 0.933 | **2.54 s** | — | 3.3% |
+| Query Rewrite + RRF | 0.955 | 0.932 | 0.933 | 7.18 s | ¥0.000392 | 0.0% |
+
+The measured default is therefore **Vector + normalized FTS**, not the most
+complicated pipeline. RRF and query rewrite remain available as ablations, but
+this run showed a quality regression; RRF also retained one transient
+Supabase-read timeout rather than hiding it. “Known LLM cost” is completed
+usage for query rewrite only, excluding embedding-provider billing, so it is
+not presented as a full invoice.
+
+The evaluator also supports end-to-end answer and agent runs. It reports
+citation source alignment, refusal correctness, tool-selection correctness,
+permission-refusal handling, task success, latency, cost, and failures.
+Semantic citation precision, key-fact coverage, and factual consistency stay
+blank until the generated audit sheet is reviewed by a human; a matching source
+document alone is deliberately not treated as proof of entailment.
+
+```bash
+# validate annotations; ingestion verifies exact upstream corpus hashes
+pkb-agent eval validate data/evals/fastapi-0.115
+pkb-agent eval ingest-corpus data/evals/fastapi-0.115
+
+# tune only on dev; keep test frozen until selecting a configuration
+pkb-agent eval run data/evals/fastapi-0.115 --split dev --repetitions 3
+pkb-agent eval run data/evals/fastapi-0.115 --split test --with-agent --repetitions 3
+```
+
+Each run writes `records.jsonl`, `summary.json`, `report.md`, an `index.html`
+dashboard, an SVG comparison chart, and—when the agent is evaluated—a blank
+`audit.template.jsonl`. Re-score reviewed audits with `pkb-agent eval report`.
+
 ## Tech stack
 
 | Layer | Choice |

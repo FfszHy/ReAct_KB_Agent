@@ -21,3 +21,7 @@ htmlcov/
 .vscode/
 
 pic/
+
+# Generated evaluation run artifacts and local corpus ingestion locks
+artifacts/evals/
+data/evals/*/corpus.lock.json

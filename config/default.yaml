@@ -24,6 +24,11 @@ rag:
   vector_weight: 0.6
   fts_weight: 0.4
 
+evaluation:
+  # For document-level benchmark metrics, retrieve this many chunks per K and
+  # retain the first chunk from each distinct source document.
+  document_candidate_multiplier: 3
+
 embedding:
   batch_size: 64
   timeout: 60

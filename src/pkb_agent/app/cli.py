@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +24,11 @@ app = typer.Typer(
     add_completion=False,
 )
 console = Console()
+eval_app = typer.Typer(
+    help="Run reproducible retrieval, grounded-answer and agent evaluations.",
+    no_args_is_help=True,
+)
+app.add_typer(eval_app, name="eval")
 
 
 # ---------------------------------------------------------------------------
@@ -170,8 +177,321 @@ def doctor() -> None:
 
 
 # ---------------------------------------------------------------------------
+# eval
+# ---------------------------------------------------------------------------
+@eval_app.command("validate")
+def eval_validate(
+    dataset: Path = typer.Argument(
+        Path("data/evals/fastapi-0.115"), help="Versioned benchmark directory."
+    ),
+) -> None:
+    """Validate annotations and ensure every relevance label exists in the corpus manifest."""
+    from pkb_agent.evaluation.corpus import CorpusManifest
+    from pkb_agent.evaluation.dataset import EvalDataset
+
+    benchmark = EvalDataset.load(dataset)
+    manifest = CorpusManifest.load(benchmark.root / benchmark.meta.corpus_manifest)
+    _validate_eval_document_keys(benchmark, manifest)
+    split_counts = {split: len(benchmark.for_split(split)) for split in ("dev", "test")}
+    answerable = sum(case.answerable for case in benchmark.cases)
+    console.print(
+        "[green]valid[/green] "
+        f"{benchmark.meta.id}@{benchmark.meta.version} · "
+        f"{len(benchmark.cases)} cases ({answerable} answerable, "
+        f"dev={split_counts['dev']}, test={split_counts['test']}) · "
+        f"{len(manifest.documents)} corpus documents pinned to {manifest.revision}"
+    )
+
+
+@eval_app.command("ingest-corpus")
+def eval_ingest_corpus(
+    dataset: Path = typer.Argument(
+        Path("data/evals/fastapi-0.115"), help="Versioned benchmark directory."
+    ),
+    user_id: str = typer.Option("eval-fastapi-0.115", "--user", help="Dedicated KB user scope."),
+    timeout_seconds: float = typer.Option(30.0, "--timeout", min=1.0, help="Per-source fetch timeout."),
+    trust_env: bool = typer.Option(
+        False,
+        "--trust-env",
+        help="Use HTTP(S)_PROXY and related environment settings for corpus downloads.",
+    ),
+    lock_file: Path | None = typer.Option(
+        None, "--lock-file", help="Where to write the exact fetched-source hashes."
+    ),
+) -> None:
+    """Fetch the pinned benchmark corpus and ingest it under stable eval:// URIs."""
+    from pkb_agent.evaluation.corpus import (
+        CorpusManifest,
+        ingest_corpus,
+        make_corpus_lock,
+        write_json,
+    )
+    from pkb_agent.evaluation.dataset import EvalDataset
+
+    benchmark = EvalDataset.load(dataset)
+    manifest = CorpusManifest.load(benchmark.root / benchmark.meta.corpus_manifest)
+    _validate_eval_document_keys(benchmark, manifest)
+    settings = get_settings()
+
+    async def _run() -> tuple[dict[str, Any], ...]:
+        return await ingest_corpus(
+            manifest,
+            settings,
+            user_id=user_id,
+            timeout_seconds=timeout_seconds,
+            trust_env=trust_env,
+        )
+
+    records = asyncio.run(_run())
+    output = lock_file or benchmark.root / "corpus.lock.json"
+    write_json(output, make_corpus_lock(manifest, records))
+    console.print(
+        f"[green]ingested[/green] {len(records)} documents into user={user_id!r}; lock: {output}"
+    )
+
+
+@eval_app.command("run")
+def eval_run(
+    dataset: Path = typer.Argument(
+        Path("data/evals/fastapi-0.115"), help="Versioned benchmark directory."
+    ),
+    split: str = typer.Option("test", "--split", help="dev, test, or all."),
+    strategies: str = typer.Option(
+        "vector,hybrid,rrf,rewrite_rrf",
+        "--strategies",
+        help="Comma-separated retrieval ablations: vector, hybrid, rrf, rewrite_rrf (fts is diagnostic).",
+    ),
+    top_k: int | None = typer.Option(None, "--top-k", min=1, help="Override benchmark K."),
+    candidate_multiplier: int | None = typer.Option(
+        None,
+        "--candidate-multiplier",
+        min=1,
+        help="Chunks retrieved per scored document before document-level deduplication.",
+    ),
+    repetitions: int = typer.Option(1, "--repetitions", min=1, max=10, help="Repeat each case."),
+    user_id: str = typer.Option("eval-fastapi-0.115", "--user", help="KB user scope."),
+    with_agent: bool = typer.Option(
+        False, "--with-agent", help="Also run expensive end-to-end agent cases."
+    ),
+    offset: int = typer.Option(0, "--offset", min=0, help="Skip this many selected-split cases."),
+    limit: int = typer.Option(0, "--limit", min=0, help="Limit cases for a smoke run (0 = all)."),
+    output_root: Path = typer.Option(
+        Path("artifacts/evals"), "--output-root", help="Parent directory for timestamped run artifacts."
+    ),
+) -> None:
+    """Run a fair retrieval ablation, emit raw records, audit template and static report."""
+    from pkb_agent.evaluation.corpus import CorpusManifest, write_json
+    from pkb_agent.evaluation.dataset import EvalDataset
+    from pkb_agent.evaluation.metrics import summarize_records
+    from pkb_agent.evaluation.report import write_report
+    from pkb_agent.evaluation.runner import (
+        RetrieverStrategy,
+        make_audit_template,
+        run_agent_evaluation,
+        run_retrieval_evaluation,
+        write_records,
+    )
+    from pkb_agent.llm.deepseek_client import DeepSeekClient
+    from pkb_agent.prompts import PromptComposer, PromptRegistry
+    from pkb_agent.prompts.query_rewriter import QueryPlanner
+    from pkb_agent.rag.embeddings import EmbeddingProvider
+    from pkb_agent.rag.retriever import Retriever
+    from pkb_agent.storage.repositories.chunks import ChunksRepository
+    from pkb_agent.storage.supabase_client import SupabaseClient
+
+    split_names = _parse_eval_splits(split)
+    benchmark = EvalDataset.load(dataset, splits=split_names)
+    manifest = CorpusManifest.load(benchmark.root / benchmark.meta.corpus_manifest)
+    _validate_eval_document_keys(benchmark, manifest)
+    remaining_cases = benchmark.cases[offset:]
+    selected_cases = list(remaining_cases[:limit] if limit else remaining_cases)
+    if not selected_cases:
+        raise typer.BadParameter("offset and limit selected zero cases")
+    strategy_names = [name.strip() for name in strategies.split(",") if name.strip()]
+    allowed = {"vector", "fts", "hybrid", "rrf", "rewrite_rrf"}
+    unknown = sorted(set(strategy_names) - allowed)
+    if unknown:
+        raise typer.BadParameter(f"unknown strategies: {', '.join(unknown)}", param_hint="--strategies")
+    if not strategy_names and not with_agent:
+        raise typer.BadParameter("select at least one retrieval strategy or --with-agent")
+    k = top_k or benchmark.meta.default_top_k
+    settings = get_settings()
+    candidate_multiplier = candidate_multiplier or settings.evaluation_document_candidate_multiplier
+    if "rewrite_rrf" in strategy_names or with_agent:
+        settings.require_llm()
+    settings.require_supabase()
+    settings.require_embedding()
+
+    async def _run() -> list[dict[str, Any]]:
+        all_records: list[dict[str, Any]] = []
+        client = SupabaseClient.from_settings(settings)
+        embedder = EmbeddingProvider.from_settings(settings)
+        llm: DeepSeekClient | None = None
+        try:
+            retriever = Retriever.from_settings(settings, embedder, ChunksRepository(client))
+            if "rewrite_rrf" in strategy_names:
+                llm = DeepSeekClient.from_settings(settings)
+                composer = PromptComposer(PromptRegistry.from_settings(settings))
+            else:
+                composer = None
+            for iteration in range(1, repetitions + 1):
+                for strategy_name in strategy_names:
+                    planner = (
+                        QueryPlanner(
+                            llm,
+                            composer,
+                            enabled=True,
+                            max_queries=settings.prompts_query_rewrite_max_queries,
+                        )
+                        if strategy_name == "rewrite_rrf" and llm is not None and composer is not None
+                        else None
+                    )
+                    strategy = RetrieverStrategy(
+                        strategy_name,
+                        retriever,
+                        user_id=user_id,
+                        planner=planner,
+                        settings=settings,
+                        candidate_multiplier=candidate_multiplier,
+                    )
+                    rows = await run_retrieval_evaluation(selected_cases, strategy, top_k=k)
+                    for row in rows:
+                        row["iteration"] = iteration
+                    all_records.extend(rows)
+        finally:
+            if llm is not None:
+                await llm.close()
+            await embedder.close()
+            client.close()
+
+        if with_agent:
+            for iteration in range(1, repetitions + 1):
+                runtime = AgentRuntime.build(settings, user_id=user_id, confirm=lambda _tool, _args: False)
+                async with runtime:
+                    rows = await run_agent_evaluation(selected_cases, runtime)
+                for row in rows:
+                    row["iteration"] = iteration
+                all_records.extend(rows)
+        return all_records
+
+    records = asyncio.run(_run())
+    run_name = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    output_dir = output_root / benchmark.meta.id / run_name
+    output_dir.mkdir(parents=True, exist_ok=False)
+    record_path = write_records(output_dir / "records.jsonl", records)
+    audit_template = make_audit_template(benchmark.cases, records)
+    if audit_template:
+        write_records(output_dir / "audit.template.jsonl", audit_template)
+    summary = summarize_records(benchmark, records, top_k=k)
+    report_paths = write_report(output_dir, summary)
+    write_json(
+        output_dir / "run.json",
+        {
+            "schema_version": 1,
+            "benchmark_id": benchmark.meta.id,
+            "benchmark_version": benchmark.meta.version,
+            "corpus_revision": manifest.revision,
+            "case_count": len(selected_cases),
+            "offset": offset,
+            "splits": split_names,
+            "strategies": strategy_names,
+            "with_agent": with_agent,
+            "repetitions": repetitions,
+            "top_k": k,
+            "candidate_multiplier": candidate_multiplier,
+            "embedding_model": settings.embedding_model,
+            "llm_model": settings.deepseek_model if ("rewrite_rrf" in strategy_names or with_agent) else None,
+            "config_sha256": _sha256_file(Path("config/default.yaml")),
+            "benchmark_sha256": _sha256_file(benchmark.root / "benchmark.json"),
+            "records": record_path.name,
+        },
+    )
+    console.print(f"[green]complete[/green] {len(records)} records → {output_dir}")
+    console.print(f"report: {report_paths['html']}")
+    if audit_template:
+        console.print(f"human audit template: {output_dir / 'audit.template.jsonl'}")
+
+
+@eval_app.command("report")
+def eval_report(
+    dataset: Path = typer.Argument(
+        Path("data/evals/fastapi-0.115"), help="Versioned benchmark directory."
+    ),
+    records: list[Path] = typer.Argument(..., help="One or more raw records.jsonl files."),
+    audits: Path | None = typer.Option(None, "--audits", help="Completed audit JSONL to merge by case_id."),
+    output_dir: Path = typer.Option(Path("artifacts/evals/report"), "--output-dir"),
+    top_k: int | None = typer.Option(None, "--top-k", min=1),
+) -> None:
+    """Re-score an existing run after reviewers complete semantic audit labels."""
+    from pkb_agent.evaluation.dataset import EvalDataset
+    from pkb_agent.evaluation.metrics import summarize_records
+    from pkb_agent.evaluation.report import write_report
+    from pkb_agent.evaluation.runner import attach_audits, read_records, write_records
+
+    benchmark = EvalDataset.load(dataset)
+    run_records = [record for path in records for record in read_records(path)]
+    if audits is not None:
+        run_records = attach_audits(run_records, read_records(audits))
+    write_records(output_dir / "records.jsonl", run_records)
+    report_paths = write_report(
+        output_dir,
+        summarize_records(benchmark, run_records, top_k=top_k or benchmark.meta.default_top_k),
+    )
+    console.print(f"[green]report written[/green] {report_paths['html']}")
+
+
+@eval_app.command("audit-template")
+def eval_audit_template(
+    dataset: Path = typer.Argument(Path("data/evals/fastapi-0.115")),
+    records: Path = typer.Argument(..., help="Raw records.jsonl containing agent records."),
+    output: Path = typer.Option(Path("audit.template.jsonl"), "--output"),
+) -> None:
+    """Generate a blank semantic citation/fact review sheet for an agent run."""
+    from pkb_agent.evaluation.dataset import EvalDataset
+    from pkb_agent.evaluation.runner import make_audit_template, read_records, write_records
+
+    benchmark = EvalDataset.load(dataset)
+    template = make_audit_template(benchmark.cases, read_records(records))
+    write_records(output, template)
+    console.print(f"[green]wrote[/green] {len(template)} audit rows to {output}")
+
+
+# ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
+def _parse_eval_splits(value: str) -> tuple[str, ...]:
+    normalized = value.strip().casefold()
+    if normalized == "all":
+        return ("dev", "test")
+    splits = tuple(dict.fromkeys(part.strip().casefold() for part in value.split(",") if part.strip()))
+    if not splits or any(part not in {"dev", "test"} for part in splits):
+        raise typer.BadParameter("split must be dev, test, all, or a comma-separated dev,test")
+    return splits
+
+
+def _validate_eval_document_keys(benchmark, manifest) -> None:
+    """Fail early when an annotation points at a source absent from its corpus."""
+    known = {document.key for document in manifest.documents}
+    missing: list[str] = []
+    for case in benchmark.cases:
+        labels = [item.key for item in case.relevant_documents]
+        labels.extend(key for fact in case.key_facts for key in fact.source_documents)
+        for key in labels:
+            if key not in known:
+                missing.append(f"{case.id}:{key}")
+    if missing:
+        preview = ", ".join(missing[:8])
+        suffix = " …" if len(missing) > 8 else ""
+        raise typer.BadParameter(f"annotation refers to unknown corpus document(s): {preview}{suffix}")
+
+
+def _sha256_file(path: Path) -> str | None:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except FileNotFoundError:
+        return None
+
+
 def _make_confirm(yes: bool):
     def confirm(tool_name: str, args: dict[str, Any]) -> bool:
         if yes:

@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from pkb_agent.rag.retriever import Retriever, SearchHit
+from pkb_agent.rag.retriever import Retriever, SearchHit, _fts_query
 
 FIXED_VECTOR = [0.1, 0.2, 0.3]
 
@@ -91,7 +91,7 @@ async def test_search_calls_both_vector_and_fts_for_long_query():
     repo.vector_search.assert_called_once()
     repo.fts_search.assert_called_once()
     fts_args = repo.fts_search.call_args.args
-    assert fts_args[0] == "hello world"
+    assert fts_args[0] == "hello OR world"
     assert fts_args[1] == 18
 
 
@@ -223,6 +223,54 @@ async def test_vector_only_respects_top_k():
     hits = await retriever.vector_only("query")
 
     assert len(hits) == 3
+
+
+# --------------------------------------------------------------------------- #
+# fts_only
+# --------------------------------------------------------------------------- #
+
+
+async def test_fts_only_never_calls_embedding_or_vector_search():
+    embedder = _make_embedder()
+    repo = _make_chunks_repo(fts_hits=[_hit("a"), _hit("b")])
+    retriever = Retriever(embedder, repo)
+
+    hits = await retriever.fts_only("query")
+
+    assert [hit.chunk_id for hit in hits] == ["a", "b"]
+    embedder.embed_one.assert_not_called()
+    repo.vector_search.assert_not_called()
+    repo.fts_search.assert_called_once()
+
+
+async def test_fts_only_short_query_returns_empty_without_calls():
+    embedder = _make_embedder()
+    repo = _make_chunks_repo(fts_hits=[_hit("a")])
+    retriever = Retriever(embedder, repo, min_query_len=5)
+
+    assert await retriever.fts_only("abc") == []
+    repo.fts_search.assert_not_called()
+
+
+async def test_weighted_hybrid_queries_both_sources_and_returns_ranked_hits():
+    embedder = _make_embedder()
+    repo = _make_chunks_repo(
+        vector_hits=[_hit("vector", vector_score=0.9), _hit("shared", vector_score=0.7)],
+        fts_hits=[_hit("lexical", fts_score=0.8), _hit("shared", fts_score=0.6)],
+    )
+    retriever = Retriever(embedder, repo)
+
+    hits = await retriever.weighted_hybrid("hello world")
+
+    assert {hit.chunk_id for hit in hits} == {"vector", "lexical", "shared"}
+    assert hits[0].score > hits[-1].score
+    assert repo.fts_search.call_args.args[0] == "hello OR world"
+
+
+def test_fts_query_drops_question_fillers_and_uses_or_terms():
+    assert _fts_query("How can FastAPI apply numeric constraints to a path parameter?") == (
+        "apply OR numeric OR constraints OR path OR parameter"
+    )
 
 
 # --------------------------------------------------------------------------- #

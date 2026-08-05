@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from pkb_agent.rag.ranking import dedupe_hits, rrf_fuse
+from pkb_agent.rag.ranking import dedupe_hits, rrf_fuse, weighted_score_fuse
 
 # ---- rrf_fuse: empty / single-list ----------------------------------------
 
@@ -102,6 +102,25 @@ def test_rrf_merges_missing_keys_from_fts():
     fts = [{"chunk_id": "a", "fts_score": 0.5, "extra": "val"}]
     out = rrf_fuse(vec, fts)
     assert out[0]["extra"] == "val"
+
+
+# ---- weighted_score_fuse ---------------------------------------------------
+
+
+def test_weighted_score_fuse_normalizes_source_scores_before_combining():
+    out = weighted_score_fuse(
+        [{"chunk_id": "v", "vector_score": 0.9}, {"chunk_id": "both", "vector_score": 0.7}],
+        [{"chunk_id": "l", "fts_score": 0.8}, {"chunk_id": "both", "fts_score": 0.6}],
+    )
+    assert [item["chunk_id"] for item in out] == ["v", "l", "both"]
+    both = next(item for item in out if item["chunk_id"] == "both")
+    assert both["vector_score"] == pytest.approx(0.7)
+    assert both["fts_score"] == pytest.approx(0.6)
+
+
+def test_weighted_score_fuse_handles_one_source_without_dividing_by_zero():
+    out = weighted_score_fuse([{"chunk_id": "a", "vector_score": 0.4}], [])
+    assert out[0]["score"] == pytest.approx(0.6)
 
 
 # ---- dedupe_hits ----------------------------------------------------------

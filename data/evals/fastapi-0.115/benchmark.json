@@ -1,0 +1,9 @@
+{
+  "id": "fastapi-0.115",
+  "title": "FastAPI 0.115 technical-documentation RAG benchmark",
+  "version": "1.0.0",
+  "language": "en",
+  "default_top_k": 6,
+  "corpus_manifest": "corpus.json",
+  "description": "A fixed FastAPI 0.115 documentation slice with 50 development and 30 frozen test questions."
+}
