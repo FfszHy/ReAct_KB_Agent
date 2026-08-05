@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 
 from pkb_agent.app.settings import Settings
-from pkb_agent.evaluation.corpus import CorpusManifest
+from pkb_agent.evaluation import corpus as corpus_module
+from pkb_agent.evaluation.corpus import CorpusDocument, CorpusManifest
 from pkb_agent.evaluation.dataset import (
     BenchmarkMeta,
     EvalCase,
@@ -23,6 +26,7 @@ from pkb_agent.evaluation.runner import (
     make_audit_template,
 )
 from pkb_agent.prompts.query_rewriter import QueryPlan
+from pkb_agent.rag.retriever import SearchHit
 
 
 def _dataset() -> EvalDataset:
@@ -190,9 +194,52 @@ def test_document_key_from_eval_uri_only_accepts_stable_eval_sources():
     assert document_key_from_uri("https://example.com/doc") is None
 
 
-async def test_rewrite_strategy_retains_completed_rewrite_cost_when_retrieval_fails():
+async def test_corpus_fetch_retries_a_transient_read_timeout(monkeypatch):
+    url = "https://example.test/source.md"
+
+    class Client:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def get(self, requested_url: str):
+            self.calls += 1
+            request = httpx.Request("GET", requested_url)
+            if self.calls == 1:
+                raise httpx.ReadTimeout("slow source", request=request)
+            return httpx.Response(200, text="verified text", request=request)
+
+    client = Client()
+    sleep = AsyncMock()
+    monkeypatch.setattr(corpus_module.asyncio, "sleep", sleep)
+
+    fetched = await corpus_module._fetch_one(
+        client,  # type: ignore[arg-type]
+        CorpusDocument(key="source", title="Source", source_url=url),
+        max_attempts=3,
+    )
+
+    assert fetched.text == "verified text"
+    assert client.calls == 2
+    sleep.assert_awaited_once_with(0.5)
+
+
+@pytest.mark.parametrize(
+    ("strategy_name", "method_name"),
+    [("rewrite_rrf", "search"), ("rewrite_hybrid", "weighted_hybrid")],
+)
+async def test_rewrite_strategy_retains_completed_rewrite_cost_when_retrieval_fails(
+    strategy_name: str, method_name: str
+):
     class FailingRetriever:
+        def __init__(self) -> None:
+            self.called: list[str] = []
+
         async def search(self, *_args, **_kwargs):
+            self.called.append("search")
+            raise RuntimeError("database unavailable")
+
+        async def weighted_hybrid(self, *_args, **_kwargs):
+            self.called.append("weighted_hybrid")
             raise RuntimeError("database unavailable")
 
     class Planner:
@@ -208,9 +255,10 @@ async def test_rewrite_strategy_retains_completed_rewrite_cost_when_retrieval_fa
         observability_cache_miss_input_token_cost_per_million=1.0,
         observability_output_token_cost_per_million=2.0,
     )
+    retriever = FailingRetriever()
     strategy = RetrieverStrategy(
-        "rewrite_rrf",
-        FailingRetriever(),  # type: ignore[arg-type]
+        strategy_name,
+        retriever,  # type: ignore[arg-type]
         user_id="eval",
         planner=Planner(),  # type: ignore[arg-type]
         settings=settings,
@@ -221,3 +269,62 @@ async def test_rewrite_strategy_retains_completed_rewrite_cost_when_retrieval_fa
     assert attempt.error == "RuntimeError: database unavailable"
     assert attempt.queries == ("keywords",)
     assert attempt.known_llm_cost == pytest.approx(0.00002)
+    assert retriever.called == [method_name]
+
+
+async def test_rewrite_hybrid_uses_weighted_hybrid_for_each_rewritten_query():
+    class HybridRetriever:
+        def __init__(self) -> None:
+            self.queries: list[str] = []
+
+        async def weighted_hybrid(self, query: str, **_kwargs):
+            self.queries.append(query)
+            if query == "first rewrite":
+                return [
+                    SearchHit(
+                        "chunk-a",
+                        "doc-a",
+                        0,
+                        "",
+                        {},
+                        source_uri="eval://unit/doc-a",
+                        score=0.8,
+                    )
+                ]
+            return [
+                SearchHit(
+                    "chunk-b",
+                    "doc-b",
+                    0,
+                    "",
+                    {},
+                    source_uri="eval://unit/doc-b",
+                    score=0.9,
+                )
+            ]
+
+        async def search(self, *_args, **_kwargs):
+            raise AssertionError("rewrite_hybrid must not use RRF search")
+
+    class Planner:
+        async def rewrite(self, **_kwargs):
+            return QueryPlan(
+                original_query="question",
+                queries=("first rewrite", "second rewrite"),
+                status="applied",
+                usage=None,
+            )
+
+    retriever = HybridRetriever()
+    strategy = RetrieverStrategy(
+        "rewrite_hybrid",
+        retriever,  # type: ignore[arg-type]
+        user_id="eval",
+        planner=Planner(),  # type: ignore[arg-type]
+    )
+
+    attempt = await strategy.retrieve("question", top_k=6)
+
+    assert set(retriever.queries) == {"first rewrite", "second rewrite"}
+    assert attempt.queries == ("first rewrite", "second rewrite")
+    assert [hit.document_id for hit in attempt.hits] == ["doc-b", "doc-a"]

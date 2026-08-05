@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FastAPI 0.115 technical-documentation RAG benchmark</title>
+  <style>
+    :root { color-scheme: light dark; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
+    body { max-width: 1080px; margin: 0 auto; padding: 40px 24px; background: #0b1020; color: #e8edf7; }
+    h1 { margin-bottom: 8px; }
+    .meta { color: #aab8d0; margin-top: 0; }
+    .card { margin-top: 24px; padding: 24px; border: 1px solid #273451; border-radius: 16px; background: #11192d; overflow-x: auto; }
+    img { width: 100%; min-width: 680px; background: #0b1020; border-radius: 12px; }
+    pre { white-space: pre-wrap; font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; color: #dce6f9; }
+    a { color: #76b7ff; }
+  </style>
+</head>
+<body>
+  <h1>FastAPI 0.115 technical-documentation RAG benchmark</h1>
+  <p class="meta">Static, reproducible benchmark report · raw records and summary.json live beside this file.</p>
+  <section class="card"><img src="comparison.svg" alt="Retrieval comparison chart"></section>
+  <section class="card"><pre># FastAPI 0.115 technical-documentation RAG benchmark
+
+Benchmark: `fastapi-0.115` · version `1.0.0` · corpus benchmark has 80 cases; this run has 30 unique cases (test) · generated 2026-08-05T07:55:13.956796+00:00
+
+## Retrieval and engineering comparison
+
+| Strategy | Recall@6 | MRR@6 | NDCG@6 | p50 | p95 | Known LLM cost | Failure rate |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| hybrid | 1.000 | 0.977 | 0.978 | 2230 ms | 3524 ms | — | 0.0% |
+| rewrite_hybrid | 1.000 | 1.000 | 0.988 | 4014 ms | 5288 ms | 0.000436 | 0.0% |
+| rewrite_rrf | 0.955 | 0.932 | 0.925 | 4494 ms | 6849 ms | 0.000451 | 0.0% |
+| rrf | 1.000 | 0.977 | 0.978 | 2552 ms | 4182 ms | — | 0.0% |
+| vector | 0.909 | 0.833 | 0.849 | 2091 ms | 6464 ms | — | 6.7% |
+
+## Interpretation safeguards
+
+- Retrieval metrics are document-level: a wider chunk candidate pool is deduplicated by source before scoring K documents.
+- Citation alignment is an automatic source-match proxy, not a semantic entailment claim.
+- Human-audit metrics remain blank until the generated audit JSONL is reviewed.
+- Known LLM cost covers only usage emitted by the configured provider; it is not an invoice.
+</pre></section>
+</body>
+</html>

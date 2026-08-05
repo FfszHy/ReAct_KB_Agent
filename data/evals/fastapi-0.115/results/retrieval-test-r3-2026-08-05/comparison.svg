@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="690" viewBox="0 0 920 690" role="img">
+<style>text{font-family:Inter,Arial,sans-serif;fill:#e8edf7}.sub{fill:#aab8d0;font-size:14px}.label{font-size:15px;font-weight:600}.value{font-size:13px;fill:#dce6f9}</style>
+<rect width="920" height="690" fill="#0b1020" rx="18"/>
+<text x="42" y="48" font-size="24" font-weight="700">Retrieval ablation</text>
+<text x="42" y="74" class="sub">All metrics are document-level on the same frozen split and top-k.</text>
+<rect x="530" y="38" width="12" height="12" fill="#66d9ef" rx="3"/>
+<text x="548" y="49" class="sub">Recall</text>
+<rect x="650" y="38" width="12" height="12" fill="#a6e22e" rx="3"/>
+<text x="668" y="49" class="sub">MRR</text>
+<rect x="770" y="38" width="12" height="12" fill="#fd971f" rx="3"/>
+<text x="788" y="49" class="sub">NDCG</text>
+<text x="42" y="150" class="label">hybrid</text>
+<rect x="270" y="124" width="600" height="12" fill="#1c2944" rx="6"/>
+<rect x="270" y="124" width="600.00" height="12" fill="#66d9ef" rx="6"/>
+<text x="882" y="135" class="value">1.000</text>
+<rect x="270" y="144" width="600" height="12" fill="#1c2944" rx="6"/>
+<rect x="270" y="144" width="586.36" height="12" fill="#a6e22e" rx="6"/>
+<text x="882" y="155" class="value">0.977</text>
+<rect x="270" y="164" width="600" height="12" fill="#1c2944" rx="6"/>
+<rect x="270" y="164" width="586.90" height="12" fill="#fd971f" rx="6"/>
+<text x="882" y="175" class="value">0.978</text>
+<text x="42" y="242" class="label">rewrite_hybrid</text>
+<rect x="270" y="216" width="600" height="12" fill="#1c2944" rx="6"/>
+<rect x="270" y="216" width="600.00" height="12" fill="#66d9ef" rx="6"/>
+<text x="882" y="227" class="value">1.000</text>
+<rect x="270" y="236" width="600" height="12" fill="#1c2944" rx="6"/>
+<rect x="270" y="236" width="600.00" height="12" fill="#a6e22e" rx="6"/>
+<text x="882" y="247" class="value">1.000</text>
+<rect x="270" y="256" width="600" height="12" fill="#1c2944" rx="6"/>
+<rect x="270" y="256" width="592.62" height="12" fill="#fd971f" rx="6"/>
+<text x="882" y="267" class="value">0.988</text>
+<text x="42" y="334" class="label">rewrite_rrf</text>
+<rect x="270" y="308" width="600" height="12" fill="#1c2944" rx="6"/>
+<rect x="270" y="308" width="572.73" height="12" fill="#66d9ef" rx="6"/>
+<text x="882" y="319" class="value">0.955</text>
+<rect x="270" y="328" width="600" height="12" fill="#1c2944" rx="6"/>
+<rect x="270" y="328" width="559.09" height="12" fill="#a6e22e" rx="6"/>
+<text x="882" y="339" class="value">0.932</text>
+<rect x="270" y="348" width="600" height="12" fill="#1c2944" rx="6"/>
+<rect x="270" y="348" width="555.28" height="12" fill="#fd971f" rx="6"/>
+<text x="882" y="359" class="value">0.925</text>
+<text x="42" y="426" class="label">rrf</text>
+<rect x="270" y="400" width="600" height="12" fill="#1c2944" rx="6"/>
+<rect x="270" y="400" width="600.00" height="12" fill="#66d9ef" rx="6"/>
+<text x="882" y="411" class="value">1.000</text>
+<rect x="270" y="420" width="600" height="12" fill="#1c2944" rx="6"/>
+<rect x="270" y="420" width="586.36" height="12" fill="#a6e22e" rx="6"/>
+<text x="882" y="431" class="value">0.977</text>
+<rect x="270" y="440" width="600" height="12" fill="#1c2944" rx="6"/>
+<rect x="270" y="440" width="586.90" height="12" fill="#fd971f" rx="6"/>
+<text x="882" y="451" class="value">0.978</text>
+<text x="42" y="518" class="label">vector</text>
+<rect x="270" y="492" width="600" height="12" fill="#1c2944" rx="6"/>
+<rect x="270" y="492" width="545.45" height="12" fill="#66d9ef" rx="6"/>
+<text x="882" y="503" class="value">0.909</text>
+<rect x="270" y="512" width="600" height="12" fill="#1c2944" rx="6"/>
+<rect x="270" y="512" width="500.00" height="12" fill="#a6e22e" rx="6"/>
+<text x="882" y="523" class="value">0.833</text>
+<rect x="270" y="532" width="600" height="12" fill="#1c2944" rx="6"/>
+<rect x="270" y="532" width="509.68" height="12" fill="#fd971f" rx="6"/>
+<text x="882" y="543" class="value">0.849</text>
+</svg>

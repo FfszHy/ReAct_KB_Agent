@@ -21,6 +21,10 @@ from pkb_agent.storage.repositories.chunks import ChunksRepository
 from pkb_agent.storage.repositories.documents import DocumentsRepository
 from pkb_agent.storage.supabase_client import SupabaseClient
 
+_DEFAULT_FETCH_ATTEMPTS = 3
+_DEFAULT_FETCH_CONCURRENCY = 3
+_RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+
 
 @dataclass(frozen=True)
 class CorpusDocument:
@@ -98,8 +102,10 @@ class FetchedCorpusDocument:
 async def fetch_corpus(
     manifest: CorpusManifest,
     *,
-    timeout_seconds: float = 30.0,
+    timeout_seconds: float = 60.0,
     trust_env: bool = False,
+    max_attempts: int = _DEFAULT_FETCH_ATTEMPTS,
+    max_concurrency: int = _DEFAULT_FETCH_CONCURRENCY,
 ) -> tuple[FetchedCorpusDocument, ...]:
     """Fetch and verify a manifest's immutable source revision.
 
@@ -107,7 +113,17 @@ async def fetch_corpus(
     actual content hashes into the run lock so later runs can additionally pin
     exact bytes even when the upstream documentation host changes formatting.
     """
+    if max_attempts < 1:
+        raise ValueError("max_attempts must be at least 1")
+    if max_concurrency < 1:
+        raise ValueError("max_concurrency must be at least 1")
     timeout = httpx.Timeout(timeout_seconds)
+    semaphore = asyncio.Semaphore(max_concurrency)
+
+    async def fetch_one(document: CorpusDocument) -> FetchedCorpusDocument:
+        async with semaphore:
+            return await _fetch_one(client, document, max_attempts=max_attempts)
+
     # Do not accidentally route public corpus downloads through a stale editor
     # proxy.  It mirrors the Supabase client's explicit proxy posture; callers
     # that genuinely need a corporate proxy can opt in.
@@ -116,25 +132,47 @@ async def fetch_corpus(
         follow_redirects=True,
         trust_env=trust_env,
     ) as client:
-        results = await asyncio.gather(
-            *(_fetch_one(client, document) for document in manifest.documents)
-        )
+        results = await asyncio.gather(*(fetch_one(document) for document in manifest.documents))
     return tuple(results)
 
 
-async def _fetch_one(client: httpx.AsyncClient, document: CorpusDocument) -> FetchedCorpusDocument:
-    try:
-        response = await client.get(document.source_url)
-        response.raise_for_status()
-    except httpx.HTTPError as exc:
-        raise DatasetError(f"failed to fetch corpus source {document.key}: {exc}") from exc
-    text = response.text
-    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
-    if document.sha256 is not None and digest != document.sha256:
-        raise DatasetError(
-            f"corpus source hash mismatch for {document.key}: expected {document.sha256}, got {digest}"
-        )
-    return FetchedCorpusDocument(document=document, text=text, sha256=digest)
+async def _fetch_one(
+    client: httpx.AsyncClient,
+    document: CorpusDocument,
+    *,
+    max_attempts: int = _DEFAULT_FETCH_ATTEMPTS,
+) -> FetchedCorpusDocument:
+    """Fetch one source with conservative retries for transient HTTP failures."""
+    last_error: httpx.HTTPError | None = None
+    for attempt in range(max_attempts):
+        try:
+            response = await client.get(document.source_url)
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            status_code = exc.response.status_code
+            if status_code not in _RETRYABLE_STATUS_CODES:
+                raise DatasetError(
+                    f"failed to fetch corpus source {document.key}: HTTP {status_code}"
+                ) from exc
+            last_error = exc
+        except httpx.RequestError as exc:
+            last_error = exc
+        else:
+            text = response.text
+            digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+            if document.sha256 is not None and digest != document.sha256:
+                raise DatasetError(
+                    f"corpus source hash mismatch for {document.key}: expected {document.sha256}, got {digest}"
+                )
+            return FetchedCorpusDocument(document=document, text=text, sha256=digest)
+
+        if attempt + 1 < max_attempts:
+            await asyncio.sleep(0.5 * (2**attempt))
+
+    assert last_error is not None
+    raise DatasetError(
+        f"failed to fetch corpus source {document.key} after {max_attempts} attempts: {last_error}"
+    ) from last_error
 
 
 async def ingest_corpus(
@@ -142,14 +180,18 @@ async def ingest_corpus(
     settings: Settings,
     *,
     user_id: str,
-    timeout_seconds: float = 30.0,
+    timeout_seconds: float = 60.0,
     trust_env: bool = False,
+    max_attempts: int = _DEFAULT_FETCH_ATTEMPTS,
+    max_concurrency: int = _DEFAULT_FETCH_CONCURRENCY,
 ) -> tuple[dict[str, Any], ...]:
     """Fetch a benchmark corpus and ingest it with stable evaluator URIs."""
     fetched = await fetch_corpus(
         manifest,
         timeout_seconds=timeout_seconds,
         trust_env=trust_env,
+        max_attempts=max_attempts,
+        max_concurrency=max_concurrency,
     )
     settings.require_supabase()
     settings.require_embedding()
@@ -161,20 +203,25 @@ async def ingest_corpus(
     records: list[dict[str, Any]] = []
     try:
         for item in fetched:
-            created = await pipeline.ingest_text(
-                item.text,
-                title=item.document.title,
-                source_uri=manifest.source_uri(item.document.key),
-                source_type="eval_corpus",
-                user_id=user_id,
-                meta={
-                    "eval_corpus_id": manifest.id,
-                    "eval_document_key": item.document.key,
-                    "upstream_url": item.document.source_url,
-                    "upstream_revision": manifest.revision,
-                    "upstream_sha256": item.sha256,
-                },
-            )
+            try:
+                created = await pipeline.ingest_text(
+                    item.text,
+                    title=item.document.title,
+                    source_uri=manifest.source_uri(item.document.key),
+                    source_type="eval_corpus",
+                    user_id=user_id,
+                    meta={
+                        "eval_corpus_id": manifest.id,
+                        "eval_document_key": item.document.key,
+                        "upstream_url": item.document.source_url,
+                        "upstream_revision": manifest.revision,
+                        "upstream_sha256": item.sha256,
+                    },
+                )
+            except Exception as exc:
+                raise DatasetError(
+                    f"failed to ingest corpus source {item.document.key}: {type(exc).__name__}: {exc}"
+                ) from exc
             records.append(
                 {
                     "key": item.document.key,

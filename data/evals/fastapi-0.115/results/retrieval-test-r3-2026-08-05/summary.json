@@ -1,0 +1,137 @@
+{
+  "benchmark": {
+    "case_count": 80,
+    "default_top_k": 6,
+    "id": "fastapi-0.115",
+    "language": "en",
+    "recorded_case_count": 30,
+    "recorded_splits": [
+      "test"
+    ],
+    "splits": {
+      "dev": 50,
+      "test": 30
+    },
+    "title": "FastAPI 0.115 technical-documentation RAG benchmark",
+    "version": "1.0.0"
+  },
+  "generated_at": "2026-08-05T07:55:13.956796+00:00",
+  "schema_version": 1,
+  "strategies": {
+    "hybrid": {
+      "engineering": {
+        "cost_record_count": 0,
+        "failure_rate": 0.0,
+        "mean_known_llm_cost": null,
+        "mean_latency_ms": 2379.5047,
+        "p50_latency_ms": 2230.406,
+        "p95_latency_ms": 3523.622,
+        "record_count": 30,
+        "total_known_llm_cost": 0.0
+      },
+      "record_count": 30,
+      "retrieval": {
+        "definition": "Document-level macro metrics; each strategy retrieves a wider chunk candidate pool, then duplicate chunks from the same source are collapsed before ranking. Recall@K is the fraction of annotated relevant documents retrieved.",
+        "evaluated_cases": 22,
+        "k": 6,
+        "mrr_at_k": 0.977273,
+        "ndcg_at_k": 0.978166,
+        "recall_at_k": 1.0,
+        "skipped_unanswerable_cases": 8,
+        "unknown_case_records": 0
+      }
+    },
+    "rewrite_hybrid": {
+      "engineering": {
+        "cost_record_count": 30,
+        "failure_rate": 0.0,
+        "mean_known_llm_cost": 0.000436,
+        "mean_latency_ms": 4068.370233,
+        "p50_latency_ms": 4014.069,
+        "p95_latency_ms": 5287.672,
+        "record_count": 30,
+        "total_known_llm_cost": 0.0130796
+      },
+      "record_count": 30,
+      "retrieval": {
+        "definition": "Document-level macro metrics; each strategy retrieves a wider chunk candidate pool, then duplicate chunks from the same source are collapsed before ranking. Recall@K is the fraction of annotated relevant documents retrieved.",
+        "evaluated_cases": 22,
+        "k": 6,
+        "mrr_at_k": 1.0,
+        "ndcg_at_k": 0.987704,
+        "recall_at_k": 1.0,
+        "skipped_unanswerable_cases": 8,
+        "unknown_case_records": 0
+      }
+    },
+    "rewrite_rrf": {
+      "engineering": {
+        "cost_record_count": 30,
+        "failure_rate": 0.0,
+        "mean_known_llm_cost": 0.000451,
+        "mean_latency_ms": 4762.681733,
+        "p50_latency_ms": 4494.49,
+        "p95_latency_ms": 6848.738,
+        "record_count": 30,
+        "total_known_llm_cost": 0.0135416
+      },
+      "record_count": 30,
+      "retrieval": {
+        "definition": "Document-level macro metrics; each strategy retrieves a wider chunk candidate pool, then duplicate chunks from the same source are collapsed before ranking. Recall@K is the fraction of annotated relevant documents retrieved.",
+        "evaluated_cases": 22,
+        "k": 6,
+        "mrr_at_k": 0.931818,
+        "ndcg_at_k": 0.925473,
+        "recall_at_k": 0.954545,
+        "skipped_unanswerable_cases": 8,
+        "unknown_case_records": 0
+      }
+    },
+    "rrf": {
+      "engineering": {
+        "cost_record_count": 0,
+        "failure_rate": 0.0,
+        "mean_known_llm_cost": null,
+        "mean_latency_ms": 2771.766633,
+        "p50_latency_ms": 2551.846,
+        "p95_latency_ms": 4182.196,
+        "record_count": 30,
+        "total_known_llm_cost": 0.0
+      },
+      "record_count": 30,
+      "retrieval": {
+        "definition": "Document-level macro metrics; each strategy retrieves a wider chunk candidate pool, then duplicate chunks from the same source are collapsed before ranking. Recall@K is the fraction of annotated relevant documents retrieved.",
+        "evaluated_cases": 22,
+        "k": 6,
+        "mrr_at_k": 0.977273,
+        "ndcg_at_k": 0.978166,
+        "recall_at_k": 1.0,
+        "skipped_unanswerable_cases": 8,
+        "unknown_case_records": 0
+      }
+    },
+    "vector": {
+      "engineering": {
+        "cost_record_count": 0,
+        "failure_rate": 0.066667,
+        "mean_known_llm_cost": null,
+        "mean_latency_ms": 2625.3218,
+        "p50_latency_ms": 2091.198,
+        "p95_latency_ms": 6464.198,
+        "record_count": 30,
+        "total_known_llm_cost": 0.0
+      },
+      "record_count": 30,
+      "retrieval": {
+        "definition": "Document-level macro metrics; each strategy retrieves a wider chunk candidate pool, then duplicate chunks from the same source are collapsed before ranking. Recall@K is the fraction of annotated relevant documents retrieved.",
+        "evaluated_cases": 22,
+        "k": 6,
+        "mrr_at_k": 0.833333,
+        "ndcg_at_k": 0.849463,
+        "recall_at_k": 0.909091,
+        "skipped_unanswerable_cases": 8,
+        "unknown_case_records": 0
+      }
+    }
+  }
+}

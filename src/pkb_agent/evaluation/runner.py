@@ -42,7 +42,14 @@ class RetrievalAttempt:
 class RetrieverStrategy:
     """Expose the production retrieval variants needed for a fair ablation."""
 
-    _MODES: ClassVar[set[str]] = {"vector", "fts", "hybrid", "rrf", "rewrite_rrf"}
+    _MODES: ClassVar[set[str]] = {
+        "vector",
+        "fts",
+        "hybrid",
+        "rrf",
+        "rewrite_rrf",
+        "rewrite_hybrid",
+    }
 
     def __init__(
         self,
@@ -56,8 +63,8 @@ class RetrieverStrategy:
     ) -> None:
         if name not in self._MODES:
             raise ValueError(f"unsupported retrieval strategy: {name}")
-        if name == "rewrite_rrf" and planner is None:
-            raise ValueError("rewrite_rrf requires a QueryPlanner")
+        if name in {"rewrite_rrf", "rewrite_hybrid"} and planner is None:
+            raise ValueError(f"{name} requires a QueryPlanner")
         self.name = name
         self._retriever = retriever
         self._user_id = user_id
@@ -95,9 +102,14 @@ class RetrieverStrategy:
             )
             queries = plan.queries or (question,)
             known_llm_cost = _usage_cost(plan.usage, self._settings)
+            search = (
+                self._retriever.search
+                if self.name == "rewrite_rrf"
+                else self._retriever.weighted_hybrid
+            )
             batches = await asyncio.gather(
                 *(
-                    self._retriever.search(query, top_k=candidate_k, user_id=self._user_id)
+                    search(query, top_k=candidate_k, user_id=self._user_id)
                     for query in queries
                 )
             )

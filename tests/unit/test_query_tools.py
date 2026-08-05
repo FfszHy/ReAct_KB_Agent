@@ -13,7 +13,7 @@ class _FakeRetriever:
     def __init__(self) -> None:
         self.calls: list[str] = []
 
-    async def search(self, query: str, *, top_k: int, user_id: str | None):
+    async def weighted_hybrid(self, query: str, *, top_k: int, user_id: str | None):
         self.calls.append(query)
         common = SearchHit(
             chunk_id="common",
@@ -32,6 +32,9 @@ class _FakeRetriever:
             score=0.9 if query == "auth decision" else 0.8,
         )
         return [common, unique]
+
+    async def search(self, *_args, **_kwargs):
+        raise AssertionError("Agent rag_search must use weighted_hybrid, not RRF")
 
 
 class _FakeSearchProvider:

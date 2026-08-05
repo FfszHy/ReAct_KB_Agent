@@ -1,4 +1,4 @@
-"""Hybrid retriever: vector + FTS search fused via RRF."""
+"""Hybrid retriever with RRF and normalized-score fusion modes."""
 
 from __future__ import annotations
 
@@ -130,9 +130,9 @@ class Retriever:
     ) -> list[SearchHit]:
         """Fuse vector and FTS scores after per-list normalization.
 
-        This supplies the plain ``Vector + FTS`` ablation.  Production RRF
-        remains :meth:`search`, so the benchmark can demonstrate the impact of
-        rank fusion independently from adding lexical retrieval itself.
+        This supplies the normalized-score ``Vector + FTS`` strategy used by
+        the production Agent's ``rag_search`` tool. :meth:`search` remains the
+        explicit RRF mode used by the retrieval ablation.
         """
         if not query or not query.strip():
             return []

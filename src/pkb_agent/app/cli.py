@@ -209,7 +209,13 @@ def eval_ingest_corpus(
         Path("data/evals/fastapi-0.115"), help="Versioned benchmark directory."
     ),
     user_id: str = typer.Option("eval-fastapi-0.115", "--user", help="Dedicated KB user scope."),
-    timeout_seconds: float = typer.Option(30.0, "--timeout", min=1.0, help="Per-source fetch timeout."),
+    timeout_seconds: float = typer.Option(60.0, "--timeout", min=1.0, help="Per-source fetch timeout."),
+    attempts: int = typer.Option(
+        3, "--attempts", min=1, max=10, help="Maximum fetch attempts per source."
+    ),
+    concurrency: int = typer.Option(
+        3, "--concurrency", min=1, max=10, help="Maximum concurrent corpus downloads."
+    ),
     trust_env: bool = typer.Option(
         False,
         "--trust-env",
@@ -240,6 +246,8 @@ def eval_ingest_corpus(
             user_id=user_id,
             timeout_seconds=timeout_seconds,
             trust_env=trust_env,
+            max_attempts=attempts,
+            max_concurrency=concurrency,
         )
 
     records = asyncio.run(_run())
@@ -257,9 +265,12 @@ def eval_run(
     ),
     split: str = typer.Option("test", "--split", help="dev, test, or all."),
     strategies: str = typer.Option(
-        "vector,hybrid,rrf,rewrite_rrf",
+        "vector,hybrid,rrf,rewrite_rrf,rewrite_hybrid",
         "--strategies",
-        help="Comma-separated retrieval ablations: vector, hybrid, rrf, rewrite_rrf (fts is diagnostic).",
+        help=(
+            "Comma-separated retrieval ablations: vector, hybrid, rrf, rewrite_rrf, "
+            "rewrite_hybrid (fts is diagnostic)."
+        ),
     ),
     top_k: int | None = typer.Option(None, "--top-k", min=1, help="Override benchmark K."),
     candidate_multiplier: int | None = typer.Option(
@@ -308,7 +319,7 @@ def eval_run(
     if not selected_cases:
         raise typer.BadParameter("offset and limit selected zero cases")
     strategy_names = [name.strip() for name in strategies.split(",") if name.strip()]
-    allowed = {"vector", "fts", "hybrid", "rrf", "rewrite_rrf"}
+    allowed = {"vector", "fts", "hybrid", "rrf", "rewrite_rrf", "rewrite_hybrid"}
     unknown = sorted(set(strategy_names) - allowed)
     if unknown:
         raise typer.BadParameter(f"unknown strategies: {', '.join(unknown)}", param_hint="--strategies")
@@ -317,7 +328,8 @@ def eval_run(
     k = top_k or benchmark.meta.default_top_k
     settings = get_settings()
     candidate_multiplier = candidate_multiplier or settings.evaluation_document_candidate_multiplier
-    if "rewrite_rrf" in strategy_names or with_agent:
+    rewrite_strategies = {"rewrite_rrf", "rewrite_hybrid"}
+    if rewrite_strategies.intersection(strategy_names) or with_agent:
         settings.require_llm()
     settings.require_supabase()
     settings.require_embedding()
@@ -329,7 +341,7 @@ def eval_run(
         llm: DeepSeekClient | None = None
         try:
             retriever = Retriever.from_settings(settings, embedder, ChunksRepository(client))
-            if "rewrite_rrf" in strategy_names:
+            if rewrite_strategies.intersection(strategy_names):
                 llm = DeepSeekClient.from_settings(settings)
                 composer = PromptComposer(PromptRegistry.from_settings(settings))
             else:
@@ -343,7 +355,7 @@ def eval_run(
                             enabled=True,
                             max_queries=settings.prompts_query_rewrite_max_queries,
                         )
-                        if strategy_name == "rewrite_rrf" and llm is not None and composer is not None
+                        if strategy_name in rewrite_strategies and llm is not None and composer is not None
                         else None
                     )
                     strategy = RetrieverStrategy(
@@ -365,10 +377,19 @@ def eval_run(
             client.close()
 
         if with_agent:
+            agent_strategy_name = (
+                "agent_rewrite_hybrid"
+                if settings.prompts_query_rewrite_enabled
+                else "agent_hybrid"
+            )
             for iteration in range(1, repetitions + 1):
                 runtime = AgentRuntime.build(settings, user_id=user_id, confirm=lambda _tool, _args: False)
                 async with runtime:
-                    rows = await run_agent_evaluation(selected_cases, runtime)
+                    rows = await run_agent_evaluation(
+                        selected_cases,
+                        runtime,
+                        strategy_name=agent_strategy_name,
+                    )
                 for row in rows:
                     row["iteration"] = iteration
                 all_records.extend(rows)
@@ -400,7 +421,11 @@ def eval_run(
             "top_k": k,
             "candidate_multiplier": candidate_multiplier,
             "embedding_model": settings.embedding_model,
-            "llm_model": settings.deepseek_model if ("rewrite_rrf" in strategy_names or with_agent) else None,
+            "llm_model": (
+                settings.deepseek_model
+                if (rewrite_strategies.intersection(strategy_names) or with_agent)
+                else None
+            ),
             "config_sha256": _sha256_file(Path("config/default.yaml")),
             "benchmark_sha256": _sha256_file(benchmark.root / "benchmark.json"),
             "records": record_path.name,

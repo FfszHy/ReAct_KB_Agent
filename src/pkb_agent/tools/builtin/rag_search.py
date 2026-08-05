@@ -1,4 +1,4 @@
-"""RAG hybrid search tool."""
+"""Weighted-hybrid RAG search tool."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ _MAX_CONTENT_PREVIEW = 800
 class RagSearchTool(BaseTool):
     name = "rag_search"
     description = (
-        "Hybrid (vector + full-text) search over your personal knowledge base. "
+        "Weighted hybrid (vector + full-text) search over your personal knowledge base. "
         "Returns ranked chunks with content previews and source metadata. Use "
         "this to find relevant notes/documents before answering."
     )
@@ -39,7 +39,10 @@ class RagSearchTool(BaseTool):
         try:
             retriever = ctx.service("retriever")
             batches = await asyncio.gather(
-                *(retriever.search(query, top_k=top_k, user_id=ctx.user_id) for query in queries)
+                *(
+                    retriever.weighted_hybrid(query, top_k=top_k, user_id=ctx.user_id)
+                    for query in queries
+                )
             )
         except Exception as e:
             return ToolResult.failure(f"rag_search failed: {e}")
