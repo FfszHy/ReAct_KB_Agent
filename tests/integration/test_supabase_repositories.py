@@ -234,7 +234,7 @@ def test_chunks_create_embeddings_formats_vectors_and_upserts():
             {
                 "chunk_id": "c1",
                 "embedding": [0.1, 0.2, 0.3],
-                "model": "text-embedding-v4",
+                "model": "qwen3.7-text-embedding",
                 "dimensions": 3,
             }
         ]
@@ -254,8 +254,8 @@ def test_chunks_create_embeddings_formats_vectors_and_upserts():
 def test_chunks_get_embeddings_by_chunk_ids_returns_metadata_by_chunk():
     client = _FakeSupabaseClient().queue(
         [
-            {"chunk_id": "c1", "model": "text-embedding-v4", "dimensions": 1536},
-            {"chunk_id": "c2", "model": "text-embedding-v4", "dimensions": 1536},
+            {"chunk_id": "c1", "model": "qwen3.7-text-embedding", "dimensions": 1536},
+            {"chunk_id": "c2", "model": "qwen3.7-text-embedding", "dimensions": 1536},
         ]
     )
     repo = ChunksRepository(client)

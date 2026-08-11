@@ -2,7 +2,7 @@
 -- Core knowledge-base tables: documents, document_chunks, chunk_embeddings.
 --
 -- NOTE on dimensions: the vector literal below uses 1536 to match the default
--- EMBEDDING_DIMENSIONS (DashScope text-embedding-v4). You MUST change every
+-- EMBEDDING_DIMENSIONS (DashScope qwen3.7-text-embedding). You MUST change every
 -- `vector(1536)` occurrence (here and in 003/005) to match your embedding
 -- model's real output dimension. Vectors from different embedding models must
 -- never be compared.

@@ -1,8 +1,15 @@
-"""OpenAI-compatible embedding provider (async, batched, retried)."""
+"""DashScope native embedding provider (async, batched, retried)."""
 
 from __future__ import annotations
 
-import httpx
+import asyncio
+from collections.abc import Mapping
+from http import HTTPStatus
+from typing import Any
+
+import dashscope
+import requests
+from dashscope.common.error import ServiceUnavailableError, TimeoutException
 from tenacity import (
     AsyncRetrying,
     retry_if_exception,
@@ -14,31 +21,48 @@ from pkb_agent.agent.errors import EmbeddingError
 from pkb_agent.app.settings import Settings
 
 
+class _RetryableDashScopeResponse(Exception):
+    """Wrap a retryable non-200 DashScope response for tenacity."""
+
+    def __init__(self, response: Any) -> None:
+        self.response = response
+        super().__init__("retryable DashScope embedding response")
+
+
 def _is_retryable_embedding_error(error: BaseException) -> bool:
-    """Retry transient transport/rate-limit/server failures, not invalid requests."""
-    if isinstance(error, httpx.RequestError):
-        return True
-    return isinstance(error, httpx.HTTPStatusError) and (
-        error.response.status_code == 429 or error.response.status_code >= 500
+    """Retry transient transport/rate-limit/server failures, not bad input."""
+    return isinstance(
+        error,
+        (
+            _RetryableDashScopeResponse,
+            requests.RequestException,
+            ServiceUnavailableError,
+            TimeoutException,
+            TimeoutError,
+            ConnectionError,
+        ),
     )
 
 
-def _provider_error_detail(response: httpx.Response) -> str:
-    """Extract a short provider error without echoing request input or credentials."""
+def _response_value(response: Any, name: str) -> Any:
+    if isinstance(response, Mapping):
+        return response.get(name)
+    return getattr(response, name, None)
+
+
+def _response_status(response: Any) -> int | None:
+    value = _response_value(response, "status_code")
     try:
-        payload = response.json()
-    except ValueError:
-        return ""
-    if not isinstance(payload, dict):
-        return ""
-    value = payload.get("error")
-    if isinstance(value, dict):
-        value = value.get("message") or value.get("code")
-    if not isinstance(value, str):
-        value = payload.get("message") or payload.get("code")
-    if not isinstance(value, str):
-        return ""
-    return " ".join(value.split())[:500]
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _provider_error_detail(response: Any) -> str:
+    """Extract a short DashScope error without echoing text or credentials."""
+    values = [_response_value(response, "code"), _response_value(response, "message")]
+    detail = ": ".join(str(value) for value in values if value)
+    return " ".join(detail.split())[:500]
 
 
 class EmbeddingProvider:
@@ -46,25 +70,21 @@ class EmbeddingProvider:
         self,
         *,
         api_key: str,
-        base_url: str,
         model: str,
         dimensions: int,
         batch_size: int = 64,
         timeout: int = 60,
     ) -> None:
         self._api_key = api_key
-        self._base_url = base_url.rstrip("/")
         self._model = model
         self._dimensions = dimensions
         self._batch_size = max(1, batch_size)
-        self._timeout = timeout
-        self._client: httpx.AsyncClient | None = None
+        self._timeout = max(1, timeout)
 
     @classmethod
     def from_settings(cls, settings: Settings) -> EmbeddingProvider:
         return cls(
             api_key=settings.embedding_api_key,
-            base_url=settings.embedding_api_base_url,
             model=settings.embedding_model,
             dimensions=settings.embedding_dimensions,
             batch_size=settings.embedding_batch_size,
@@ -79,28 +99,63 @@ class EmbeddingProvider:
     def dimensions(self) -> int:
         return self._dimensions
 
-    def _ensure_client(self) -> httpx.AsyncClient:
-        if self._client is None:
-            self._client = httpx.AsyncClient(
-                timeout=self._timeout,
-                headers={"Authorization": f"Bearer {self._api_key}"},
-            )
-        return self._client
-
     async def __aenter__(self) -> EmbeddingProvider:
-        self._ensure_client()
         return self
 
     async def __aexit__(self, exc_type, exc, tb) -> None:
         await self.close()
 
     async def close(self) -> None:
-        if self._client is not None:
-            await self._client.aclose()
-            self._client = None
+        """Keep the provider lifecycle compatible with existing callers."""
+
+    def _response_error(self, response: Any, batch_size: int) -> EmbeddingError:
+        status_code = _response_status(response)
+        status = str(status_code) if status_code is not None else "unknown"
+        detail = _provider_error_detail(response)
+        suffix = f": {detail}" if detail else ""
+        return EmbeddingError(
+            "DashScope embedding API rejected request "
+            f"(HTTP {status}, model={self._model!r}, batch_items={batch_size}, "
+            f"dimensions={self._dimensions}){suffix}"
+        )
+
+    def _parse_embeddings(self, response: Any, texts: list[str]) -> list[list[float]]:
+        output = _response_value(response, "output")
+        embeddings = _response_value(output, "embeddings")
+        if not isinstance(embeddings, list):
+            raise EmbeddingError("DashScope embedding response contained no embeddings")
+        if len(embeddings) != len(texts):
+            raise EmbeddingError(
+                f"embedding count mismatch: got {len(embeddings)}, expected {len(texts)}"
+            )
+
+        ordered: list[list[float] | None] = [None] * len(texts)
+        for item in embeddings:
+            if not isinstance(item, Mapping):
+                raise EmbeddingError("DashScope embedding response contained an invalid item")
+            text_index = item.get("text_index")
+            vector = item.get("embedding")
+            if (
+                not isinstance(text_index, int)
+                or text_index < 0
+                or text_index >= len(texts)
+                or ordered[text_index] is not None
+            ):
+                raise EmbeddingError("DashScope embedding response contained invalid text indexes")
+            if not isinstance(vector, list):
+                raise EmbeddingError("DashScope embedding response contained an invalid vector")
+            if len(vector) != self._dimensions:
+                raise EmbeddingError(
+                    f"embedding dimension mismatch: got {len(vector)}, "
+                    f"expected {self._dimensions}"
+                )
+            ordered[text_index] = vector
+
+        if any(vector is None for vector in ordered):
+            raise EmbeddingError("DashScope embedding response omitted an input text")
+        return [vector for vector in ordered if vector is not None]
 
     async def _embed_batch(self, texts: list[str]) -> list[list[float]]:
-        client = self._ensure_client()
         result: list[list[float]] = []
         try:
             async for attempt in AsyncRetrying(
@@ -110,43 +165,25 @@ class EmbeddingProvider:
                 reraise=True,
             ):
                 with attempt:
-                    resp = await client.post(
-                        f"{self._base_url}/embeddings",
-                        json={
-                            "model": self._model,
-                            "input": texts,
-                            "dimensions": self._dimensions,
-                            "encoding_format": "float",
-                        },
+                    resp = await asyncio.to_thread(
+                        dashscope.TextEmbedding.call,
+                        model=self._model,
+                        input=texts,
+                        api_key=self._api_key,
+                        dimension=self._dimensions,
+                        request_timeout=self._timeout,
                     )
-                    resp.raise_for_status()
-                    payload = resp.json()
-                    data = payload.get("data") or []
-                    embeds = [
-                        item["embedding"]
-                        for item in sorted(data, key=lambda x: x.get("index", 0))
-                    ]
-                    if len(embeds) != len(texts):
-                        raise EmbeddingError(
-                            f"embedding count mismatch: got {len(embeds)}, "
-                            f"expected {len(texts)}"
-                        )
-                    for vec in embeds:
-                        if len(vec) != self._dimensions:
-                            raise EmbeddingError(
-                                f"embedding dimension mismatch: got {len(vec)}, "
-                                f"expected {self._dimensions}"
-                            )
-                    result = embeds
-        except httpx.HTTPStatusError as e:
-            detail = _provider_error_detail(e.response)
-            suffix = f": {detail}" if detail else ""
-            raise EmbeddingError(
-                "embedding API rejected request "
-                f"(HTTP {e.response.status_code}, model={self._model!r}, "
-                f"batch_items={len(texts)}, dimensions={self._dimensions}){suffix}"
-            ) from e
-        except httpx.HTTPError as e:
+                    status_code = _response_status(resp)
+                    if status_code != HTTPStatus.OK:
+                        if status_code == HTTPStatus.TOO_MANY_REQUESTS or (
+                            status_code is not None and status_code >= 500
+                        ):
+                            raise _RetryableDashScopeResponse(resp)
+                        raise self._response_error(resp, len(texts))
+                    result = self._parse_embeddings(resp, texts)
+        except _RetryableDashScopeResponse as e:
+            raise self._response_error(e.response, len(texts)) from e
+        except requests.RequestException as e:
             raise EmbeddingError(f"embedding request failed: {e}") from e
         except EmbeddingError:
             raise

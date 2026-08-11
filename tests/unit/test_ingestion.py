@@ -11,7 +11,7 @@ async def test_ingest_resumes_existing_document_missing_embeddings():
     chunks = Mock()
     chunks.list_by_document.return_value = [{"id": "chunk-1", "content": "resume me"}]
     chunks.get_embeddings_by_chunk_ids.return_value = {}
-    embedder = Mock(model="text-embedding-v4", dimensions=3)
+    embedder = Mock(model="qwen3.7-text-embedding", dimensions=3)
     embedder.embed = AsyncMock(return_value=[[0.1, 0.2, 0.3]])
     pipeline = IngestionPipeline(documents, chunks, embedder)
 
@@ -25,7 +25,7 @@ async def test_ingest_resumes_existing_document_missing_embeddings():
             {
                 "chunk_id": "chunk-1",
                 "embedding": [0.1, 0.2, 0.3],
-                "model": "text-embedding-v4",
+                "model": "qwen3.7-text-embedding",
                 "dimensions": 3,
             }
         ]

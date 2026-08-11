@@ -8,6 +8,7 @@ import time
 from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import Any, ClassVar, Protocol
+from urllib.parse import urlsplit, urlunsplit
 
 from pkb_agent.agent.runtime import AgentRuntime
 from pkb_agent.app.settings import Settings
@@ -213,6 +214,7 @@ async def run_agent_evaluation(
         raw_citations = payload.get("citations")
         citations = raw_citations if isinstance(raw_citations, list) else []
         citation_rows = [item for item in citations if isinstance(item, dict)]
+        source_url_keys = _source_url_keys(case)
         record = {
             "schema_version": 1,
             "kind": "agent",
@@ -225,8 +227,13 @@ async def run_agent_evaluation(
             "known_llm_cost": _float_or_none(state.usage.get("actual_cost")),
             "tools": [step.tool_call.name for step in state.steps if step.tool_call is not None],
             "tool_errors": [step.error for step in state.steps if isinstance(step.error, str)],
-            "cited_document_keys": _document_keys_from_citations(citation_rows),
-            "citations": [_serialize_citation(item) for item in citation_rows],
+            "cited_document_keys": _document_keys_from_citations(
+                citation_rows, source_url_keys=source_url_keys
+            ),
+            "citations": [
+                _serialize_citation(item, source_url_keys=source_url_keys)
+                for item in citation_rows
+            ],
             "answer_status": str(payload.get("status") or ""),
             "verification_status": str(state.verification.get("status") or ""),
             "answer": payload.get("answer"),
@@ -346,11 +353,20 @@ def _document_keys_from_hits(hits: Iterable[SearchHit]) -> list[str]:
     return result
 
 
-def _document_keys_from_citations(citations: Iterable[Mapping[str, Any]]) -> list[str]:
+def _document_keys_from_citations(
+    citations: Iterable[Mapping[str, Any]],
+    *,
+    source_url_keys: Mapping[str, str] | None = None,
+) -> list[str]:
     result: list[str] = []
     seen: set[str] = set()
     for citation in citations:
-        key = document_key_from_uri(citation.get("locator"))
+        locator = citation.get("locator")
+        key = document_key_from_uri(locator)
+        if key is None and source_url_keys is not None:
+            normalised_locator = _normalise_external_locator(locator)
+            if normalised_locator is not None:
+                key = source_url_keys.get(normalised_locator)
         if key and key not in seen:
             seen.add(key)
             result.append(key)
@@ -371,14 +387,46 @@ def _serialize_hit(hit: SearchHit) -> dict[str, Any]:
     }
 
 
-def _serialize_citation(citation: Mapping[str, Any]) -> dict[str, Any]:
+def _serialize_citation(
+    citation: Mapping[str, Any],
+    *,
+    source_url_keys: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
     locator = citation.get("locator")
+    document_key = document_key_from_uri(locator)
+    if document_key is None and source_url_keys is not None:
+        normalised_locator = _normalise_external_locator(locator)
+        if normalised_locator is not None:
+            document_key = source_url_keys.get(normalised_locator)
     return {
         "id": citation.get("id"),
-        "document_key": document_key_from_uri(locator),
+        "document_key": document_key,
         "locator": locator,
         "title": citation.get("title"),
     }
+
+
+def _source_url_keys(case: EvalCase) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for document in case.relevant_documents:
+        locator = _normalise_external_locator(document.source_url)
+        if locator is not None:
+            result[locator] = document.key
+    return result
+
+
+def _normalise_external_locator(value: Any) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = urlsplit(value.strip())
+    except ValueError:
+        return None
+    if not parsed.scheme or not parsed.hostname:
+        return None
+    hostname = parsed.hostname.casefold().rstrip(".")
+    netloc = hostname if parsed.port is None else f"{hostname}:{parsed.port}"
+    return urlunsplit((parsed.scheme.casefold(), netloc, parsed.path or "/", parsed.query, ""))
 
 
 def _merge_hits(batches: Iterable[Iterable[SearchHit]], *, top_k: int) -> list[SearchHit]:

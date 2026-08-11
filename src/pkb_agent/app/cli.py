@@ -157,7 +157,6 @@ def doctor() -> None:
     _check("Supabase URL", bool(settings.supabase_url))
     _check("Supabase service role key", bool(settings.supabase_service_role_key))
     _check("Embedding API key", bool(settings.embedding_api_key))
-    _check("Embedding base URL", bool(settings.embedding_api_base_url))
     _check(
         f"Embedding model/dimensions ({settings.embedding_model}/{settings.embedding_dimensions})",
         True,
@@ -294,6 +293,16 @@ def eval_run(
     with_agent: bool = typer.Option(
         False, "--with-agent", help="Also run expensive end-to-end agent cases."
     ),
+    agent_profile: str = typer.Option(
+        "full",
+        "--agent-profile",
+        help="Agent eval profile: full, kb_only, permission, or web_approved.",
+    ),
+    web_allow_host: list[str] = typer.Option(
+        [],
+        "--web-allow-host",
+        help="Exact host approved for web_approved fetches; repeat the option for multiple hosts.",
+    ),
     offset: int = typer.Option(0, "--offset", min=0, help="Skip this many selected-split cases."),
     limit: int = typer.Option(0, "--limit", min=0, help="Limit cases for a smoke run (0 = all)."),
     output_root: Path = typer.Option(
@@ -301,6 +310,11 @@ def eval_run(
     ),
 ) -> None:
     """Run a fair retrieval ablation, emit raw records, audit template and static report."""
+    from pkb_agent.evaluation.agent_profiles import (
+        get_agent_evaluation_profile,
+        make_profile_confirmation,
+        select_agent_cases,
+    )
     from pkb_agent.evaluation.corpus import CorpusManifest, write_json
     from pkb_agent.evaluation.dataset import EvalDataset
     from pkb_agent.evaluation.metrics import summarize_records
@@ -335,6 +349,25 @@ def eval_run(
         raise typer.BadParameter(f"unknown strategies: {', '.join(unknown)}", param_hint="--strategies")
     if not strategy_names and not with_agent:
         raise typer.BadParameter("select at least one retrieval strategy or --with-agent")
+    try:
+        profile = get_agent_evaluation_profile(agent_profile)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc), param_hint="--agent-profile") from exc
+    if not with_agent and (profile.name != "full" or web_allow_host):
+        raise typer.BadParameter("--agent-profile and --web-allow-host require --with-agent")
+    if web_allow_host and not profile.requires_web_allowlist:
+        raise typer.BadParameter(
+            "--web-allow-host is only valid with --agent-profile web_approved",
+            param_hint="--web-allow-host",
+        )
+    agent_cases = select_agent_cases(selected_cases, profile) if with_agent else ()
+    if with_agent and not agent_cases:
+        tag = profile.required_tag or "selected profile"
+        raise typer.BadParameter(f"agent profile {profile.name!r} selected zero cases for tag {tag!r}")
+    try:
+        agent_confirmation = make_profile_confirmation(profile, web_allow_host)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc), param_hint="--web-allow-host") from exc
     k = top_k or benchmark.meta.default_top_k
     settings = get_settings()
     candidate_multiplier = candidate_multiplier or settings.evaluation_document_candidate_multiplier
@@ -344,7 +377,7 @@ def eval_run(
     settings.require_supabase()
     settings.require_embedding()
     retrieval_case_runs = len(selected_cases) * len(strategy_names) * repetitions
-    agent_case_runs = len(selected_cases) * repetitions if with_agent else 0
+    agent_case_runs = len(agent_cases) * repetitions if with_agent else 0
     total_case_runs = retrieval_case_runs + agent_case_runs
     rewrite_case_runs = len(selected_cases) * repetitions * len(
         rewrite_strategies.intersection(strategy_names)
@@ -354,7 +387,11 @@ def eval_run(
         f"{repetitions} repetition(s) = {retrieval_case_runs} retrieval case-runs"
     )
     if with_agent:
-        start_details += f" + {agent_case_runs} agent case-runs"
+        tools = ",".join(profile.allowed_tools or ("all",))
+        start_details += (
+            f" + {agent_case_runs} agent case-runs "
+            f"({profile.name}; {len(agent_cases)} cases; tools={tools})"
+        )
     if rewrite_case_runs:
         start_details += f" · {rewrite_case_runs} Query Rewrite calls"
     console.print(f"[cyan]starting evaluation[/cyan] {start_details}")
@@ -363,7 +400,7 @@ def eval_run(
         all_records: list[dict[str, Any]] = []
         completed_case_runs = 0
         execution_failed_case_runs = 0
-        non_interactive_interval = max(1, len(selected_cases) // 10)
+        non_interactive_interval = max(1, max(len(selected_cases), len(agent_cases)) // 10)
         progress = Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -460,24 +497,36 @@ def eval_run(
                 client.close()
 
             if with_agent:
-                agent_strategy_name = (
-                    "agent_rewrite_hybrid"
-                    if settings.prompts_query_rewrite_enabled
-                    else "agent_hybrid"
+                agent_strategy_name = _agent_strategy_name(
+                    profile.name,
+                    rewrite_enabled=settings.prompts_query_rewrite_enabled,
                 )
+                # Evaluation must not inherit mutable permission rows from a
+                # long-lived workbench. The checked-in YAML policy and the
+                # selected profile are the experiment contract.
+                agent_settings = settings.model_copy(deep=True)
+                agent_settings.permissions_db_overrides_enabled = False
                 for iteration in range(1, repetitions + 1):
                     label = f"agent {iteration}/{repetitions} · {agent_strategy_name}"
                     progress.update(progress_task, description=f"{label} · starting")
-                    runtime = AgentRuntime.build(settings, user_id=user_id, confirm=lambda _tool, _args: False)
+                    runtime = AgentRuntime.build(
+                        agent_settings,
+                        user_id=user_id,
+                        confirm=agent_confirmation,
+                    )
+                    if profile.allowed_tools is not None:
+                        runtime.restrict_tools(profile.allowed_tools)
                     async with runtime:
                         rows = await run_agent_evaluation(
-                            selected_cases,
+                            agent_cases,
                             runtime,
                             strategy_name=agent_strategy_name,
                             on_progress=make_progress_callback(label),
                         )
                     for row in rows:
                         row["iteration"] = iteration
+                        row["agent_profile"] = profile.name
+                        row["agent_allowed_tools"] = list(profile.allowed_tools or ())
                     all_records.extend(rows)
                     progress.console.print(f"[green]completed[/green] {label} · {len(rows)} cases")
         return all_records
@@ -500,6 +549,11 @@ def eval_run(
             "benchmark_version": benchmark.meta.version,
             "corpus_revision": manifest.revision,
             "case_count": len(selected_cases),
+            "agent_case_count": len(agent_cases),
+            "agent_profile": profile.name if with_agent else None,
+            "agent_allowed_tools": list(profile.allowed_tools or ()) if with_agent else [],
+            "agent_web_allow_hosts": web_allow_host if with_agent else [],
+            "agent_permissions_db_overrides_enabled": False if with_agent else None,
             "offset": offset,
             "splits": split_names,
             "strategies": strategy_names,
@@ -579,6 +633,15 @@ def _parse_eval_splits(value: str) -> tuple[str, ...]:
     if not splits or any(part not in {"dev", "test"} for part in splits):
         raise typer.BadParameter("split must be dev, test, all, or a comma-separated dev,test")
     return splits
+
+
+def _agent_strategy_name(profile_name: str, *, rewrite_enabled: bool) -> str:
+    """Keep profile-specific Agent artifacts distinct in reports and JSONL."""
+    if profile_name == "full":
+        return "agent_rewrite_hybrid" if rewrite_enabled else "agent_hybrid"
+    if profile_name == "kb_only":
+        return "agent_kb_only_rewrite_hybrid" if rewrite_enabled else "agent_kb_only_hybrid"
+    return f"agent_{profile_name}"
 
 
 def _validate_eval_document_keys(benchmark, manifest) -> None:

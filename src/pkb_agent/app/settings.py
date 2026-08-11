@@ -110,14 +110,14 @@ class Settings(BaseSettings):
     # ingestion; avoid HTTPX's short default timeout on slow connections.
     supabase_timeout: int = Field(default=60, ge=1)
 
-    # Embedding (OpenAI-compatible /embeddings endpoint)
+    # Embedding (DashScope native TextEmbedding SDK)
     embedding_api_key: str = ""
-    embedding_api_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    embedding_model: str = "text-embedding-v4"
+    embedding_model: str = "qwen3.7-text-embedding"
+    # Keep 1536 dimensions by default so a new installation matches the
+    # pgvector schema in supabase/migrations. qwen3.7 supports this size.
     embedding_dimensions: int = 1536
-    # DashScope text-embedding-v3/v4 accepts at most 10 strings per request.
-    # Other OpenAI-compatible providers can override this through the env var.
-    embedding_batch_size: int = 10
+    # qwen3.7-text-embedding accepts at most 20 strings per request.
+    embedding_batch_size: int = 20
     embedding_timeout: int = 60
 
     # Web search
@@ -221,7 +221,7 @@ class Settings(BaseSettings):
         self.require("supabase_url", "supabase_service_role_key")
 
     def require_embedding(self) -> None:
-        self.require("embedding_api_key", "embedding_api_base_url", "embedding_model")
+        self.require("embedding_api_key", "embedding_model")
 
     def require_web_search(self) -> None:
         self.require("web_search_api_key")

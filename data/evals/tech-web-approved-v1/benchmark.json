@@ -1,0 +1,9 @@
+{
+  "id": "tech-web-approved-v1",
+  "title": "Approved-web technical-documentation acceptance benchmark",
+  "version": "1.0.0",
+  "language": "en",
+  "default_top_k": 6,
+  "corpus_manifest": "../tech-multidomain-v1/corpus.json",
+  "description": "A small, separate acceptance suite for explicit user-approved fetches of revision-pinned technical-documentation URLs. It is not part of the KB-only RAG leaderboard."
+}

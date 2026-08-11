@@ -59,7 +59,7 @@ def test_deepseek_temperature_environment_override_takes_precedence(monkeypatch)
     assert settings.llm_temperature == 0.11
 
 
-def test_default_embedding_batch_size_matches_dashscope_v4_limit(monkeypatch, tmp_path):
+def test_default_embedding_settings_match_qwen37_dashscope_limits(monkeypatch, tmp_path):
     config_path = tmp_path / "config.yaml"
     config_path.write_text("{}\n", "utf-8")
     monkeypatch.setenv("PKB_CONFIG_PATH", str(config_path))
@@ -67,4 +67,6 @@ def test_default_embedding_batch_size_matches_dashscope_v4_limit(monkeypatch, tm
 
     settings = Settings(_env_file=None)
 
-    assert settings.embedding_batch_size == 10
+    assert settings.embedding_model == "qwen3.7-text-embedding"
+    assert settings.embedding_dimensions == 1536
+    assert settings.embedding_batch_size == 20

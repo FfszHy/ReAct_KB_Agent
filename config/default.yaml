@@ -30,9 +30,8 @@ evaluation:
   document_candidate_multiplier: 3
 
 embedding:
-  # DashScope text-embedding-v4 allows at most 10 input strings per request.
-  # Override only when the configured provider supports a larger batch.
-  batch_size: 10
+  # qwen3.7-text-embedding allows at most 20 input strings per request.
+  batch_size: 20
   timeout: 60
 
 web:

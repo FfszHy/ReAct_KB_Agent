@@ -243,6 +243,19 @@ def test_tool_registry_require_unknown_raises_not_found():
         registry.require("ghost")
 
 
+def test_runtime_can_restrict_the_tool_surface_for_an_evaluation_profile():
+    rt = _make_runtime(
+        llm_side_effect=[],
+        tools=[_EchoTool(), _FailTool()],
+    )
+
+    rt.restrict_tools(["echo"])
+
+    assert rt.registry.names() == ["echo"]
+    with pytest.raises(ValueError, match="unknown tools"):
+        rt.restrict_tools(["missing"])
+
+
 # --------------------------------------------------------------------------- #
 # Component: ToolResult
 # --------------------------------------------------------------------------- #

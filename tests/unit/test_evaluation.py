@@ -97,6 +97,28 @@ def test_checked_in_multidomain_dataset_has_pinned_40_document_frozen_test():
     }.issubset(keys)
 
 
+def test_checked_in_approved_web_dataset_reuses_pinned_documents_with_external_locators():
+    dataset = EvalDataset.load("data/evals/tech-web-approved-v1")
+    manifest = CorpusManifest.load(dataset.root / dataset.meta.corpus_manifest)
+    keys = {document.key for document in manifest.documents}
+    cases = dataset.for_split("test")
+
+    assert len(dataset.for_split("dev")) == 0
+    assert len(cases) == 4
+    assert all("web-approved" in case.tags for case in cases)
+    assert all(case.agent and case.agent.required_all_tools == ("web_fetch",) for case in cases)
+    assert {
+        document.key
+        for case in cases
+        for document in case.relevant_documents
+    }.issubset(keys)
+    assert all(
+        document.source_url and document.source_url.startswith("https://raw.githubusercontent.com/")
+        for case in cases
+        for document in case.relevant_documents
+    )
+
+
 def test_dataset_loads_declared_split_includes(tmp_path: Path):
     included = tmp_path / "included.dev.jsonl"
     included.write_text(
@@ -380,6 +402,41 @@ async def test_agent_runner_marks_normal_refusal_as_an_execution_success():
 
     assert records[0]["execution_success"] is True
     assert records[0]["success"] is False
+
+
+async def test_agent_runner_maps_approved_web_citation_to_its_annotated_source_url():
+    source_url = "https://raw.githubusercontent.com/example/project/v1/docs/page.md"
+    case = EvalCase(
+        id="web",
+        question="Fetch the approved page.",
+        answerable=True,
+        relevant_documents=(RelevantDocument("web-page", 2, source_url),),
+    )
+    state = AgentRunState(question=case.question)
+    state.status = AgentStatus.FINISHED
+    state.answer_payload = {
+        "answer": "The approved page says hello.",
+        "status": "grounded",
+        "claims": [],
+        "citations": [
+            {
+                "id": "web:fixture",
+                "locator": f"{source_url}#section",
+                "title": "Fixture page",
+            }
+        ],
+    }
+    state.verification = {"status": "verified"}
+    state.mark_finished()
+
+    class WebRuntime:
+        async def run(self, _question: str) -> AgentRunState:
+            return state
+
+    records = await run_agent_evaluation([case], WebRuntime())  # type: ignore[arg-type]
+
+    assert records[0]["cited_document_keys"] == ["web-page"]
+    assert records[0]["citations"][0]["document_key"] == "web-page"
 
 
 def test_report_and_audit_artifacts_are_portable(tmp_path: Path):

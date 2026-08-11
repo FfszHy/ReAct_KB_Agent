@@ -24,6 +24,10 @@ class RelevantDocument:
 
     key: str
     grade: int = 1
+    # Optional canonical external locator.  It is used only by dedicated
+    # approved-web acceptance cases to map a fetched-page citation back to a
+    # stable document key for scoring.
+    source_url: str | None = None
 
     @classmethod
     def from_dict(cls, value: Any, *, context: str) -> RelevantDocument:
@@ -36,7 +40,10 @@ class RelevantDocument:
             raise DatasetError(f"{context}.grade must be an integer") from exc
         if grade not in (1, 2):
             raise DatasetError(f"{context}.grade must be 1 or 2")
-        return cls(key=key, grade=grade)
+        source_url = value.get("source_url")
+        if source_url is not None:
+            source_url = _required_text(source_url, f"{context}.source_url")
+        return cls(key=key, grade=grade, source_url=source_url)
 
 
 @dataclass(frozen=True)

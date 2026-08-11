@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -171,6 +171,27 @@ class AgentRuntime:
             except Exception:
                 pass
         self._closables = []
+
+    def restrict_tools(self, allowed_names: Iterable[str]) -> None:
+        """Expose only an explicit tool allowlist to a single runtime instance.
+
+        This is used by reproducible evaluations to prevent unavailable
+        capabilities such as web search from contaminating a KB-only score.
+        The underlying services are left untouched; the LLM receives only the
+        retained schemas and any invented tool call is rejected normally.
+        """
+        if not self._assembled:
+            raise AgentError("runtime not assembled; call AgentRuntime.build()")
+        allowed = {str(name).strip() for name in allowed_names if str(name).strip()}
+        if not allowed:
+            raise ValueError("tool allowlist must not be empty")
+        available = set(self.registry.names())
+        unknown = sorted(allowed - available)
+        if unknown:
+            raise ValueError(f"unknown tools in allowlist: {', '.join(unknown)}")
+        self.registry = ToolRegistry().register_all(
+            [tool for tool in self.registry.all() if tool.name in allowed]
+        )
 
     # ------------------------------------------------------------------
     async def run(

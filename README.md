@@ -278,13 +278,16 @@ pkb-agent ask "Summarize the auth design decisions in my notes"
 
 ## Embedding model
 
-The embedding client speaks the OpenAI-compatible `/embeddings` protocol, so it
-works with DashScope (default: `text-embedding-v4` / 1536 dims), OpenAI,
-SiliconFlow, or any local server. Set `EMBEDDING_API_BASE_URL`,
-`EMBEDDING_MODEL`, and `EMBEDDING_DIMENSIONS` accordingly.
-For DashScope `text-embedding-v3`/`v4`, keep `EMBEDDING_BATCH_SIZE=10` (the
-provider accepts at most 10 input strings per request); other compatible
-providers may override the batch size when their limits differ.
+The embedding client uses DashScope's native Python SDK and calls
+`dashscope.TextEmbedding.call`. The default model is
+`qwen3.7-text-embedding`; it explicitly requests 1536 dimensions so it matches
+the supplied pgvector migrations. Configure `EMBEDDING_API_KEY`,
+`EMBEDDING_MODEL`, `EMBEDDING_DIMENSIONS`, and `EMBEDDING_BATCH_SIZE`.
+
+`qwen3.7-text-embedding` accepts at most 20 input strings per request, so the
+default `EMBEDDING_BATCH_SIZE` is 20. If you change the model or dimensions,
+re-ingest the knowledge base before querying it: vectors from different models
+must not be mixed.
 
 ## License
 
