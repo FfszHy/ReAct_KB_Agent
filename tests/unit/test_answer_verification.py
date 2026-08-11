@@ -109,3 +109,81 @@ def test_web_search_results_are_not_citation_eligible_until_fetched():
     )
 
     assert records == []
+
+
+def test_document_catalog_page_is_a_single_citation_eligible_evidence_record():
+    records = extract_evidence(
+        "rag_list_documents",
+        {
+            "items": [
+                {
+                    "document_id": "doc-1",
+                    "title": "产品需求说明书",
+                    "source_uri": "file://requirements.pdf",
+                    "source_type": "file",
+                    "chunk_count": 8,
+                    "char_count": 2400,
+                }
+            ]
+        },
+        settings=SimpleNamespace(),
+    )
+
+    assert len(records) == 1
+    evidence = records[0]
+    assert evidence.citation_id == "kbcatalog:0"
+    assert evidence.source_type == "kb_catalog"
+    assert evidence.title == "知识库资料目录 - 第 1 至 1 份"
+    assert evidence.metadata == {"offset": 0, "count": 1, "next_offset": None}
+
+    response = {
+        "status": "grounded",
+        "answer": "知识库中包含《产品需求说明书》。",
+        "claims": [
+            {
+                "text": "知识库目录中记录了一份名为《产品需求说明书》的资料。",
+                "kind": "fact",
+                "citations": ["kbcatalog:0"],
+            }
+        ],
+        "citations": [{"id": "kbcatalog:0"}],
+    }
+    assert AnswerVerifier().validate(json.dumps(response), {evidence.citation_id: evidence}).valid
+
+
+def test_large_catalog_uses_one_evidence_record_per_page():
+    first_page = {
+        "offset": 0,
+        "next_offset": 20,
+        "items": [{"document_id": f"doc-{index}", "title": f"资料 {index}"} for index in range(20)],
+    }
+    second_page = {
+        "offset": 20,
+        "next_offset": None,
+        "items": [{"document_id": f"doc-{index}", "title": f"资料 {index}"} for index in range(20, 40)],
+    }
+    evidence = {
+        record.citation_id: record
+        for page in (first_page, second_page)
+        for record in extract_evidence("rag_list_documents", page, settings=SimpleNamespace())
+    }
+
+    assert set(evidence) == {"kbcatalog:0", "kbcatalog:20"}
+    response = {
+        "status": "grounded",
+        "answer": "知识库目录共列出 40 份资料, 分布在两个目录页中。",
+        "claims": [
+            {
+                "text": "目录第 1 页列出 20 份资料。",
+                "kind": "fact",
+                "citations": ["kbcatalog:0"],
+            },
+            {
+                "text": "目录第 2 页列出另外 20 份资料。",
+                "kind": "fact",
+                "citations": ["kbcatalog:20"],
+            },
+        ],
+        "citations": [{"id": "kbcatalog:0"}, {"id": "kbcatalog:20"}],
+    }
+    assert AnswerVerifier().validate(json.dumps(response), evidence).valid

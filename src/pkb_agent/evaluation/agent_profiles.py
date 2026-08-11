@@ -34,7 +34,7 @@ _PROFILES: dict[str, AgentEvaluationProfile] = {
     # into answer quality, citations, latency, or refusal behavior.
     "kb_only": AgentEvaluationProfile(
         name="kb_only",
-        allowed_tools=("rag_search", "rag_read"),
+        allowed_tools=("rag_list_documents", "rag_search", "rag_read"),
         excluded_tag="permission",
     ),
     # Explicit URL requests that must select a protected tool and then safely

@@ -56,21 +56,31 @@ document alone is deliberately not treated as proof of entailment.
 
 ```bash
 # Recommended final benchmark: validate annotations; ingestion verifies exact upstream corpus hashes.
-pkb-agent eval validate data/evals/tech-multidomain-v1
-SUPABASE_TIMEOUT=90 pkb-agent eval ingest-corpus data/evals/tech-multidomain-v1 --user eval-tech-multidomain-v1 --timeout 90 --attempts 4 --concurrency 2
-pkb-agent eval run data/evals/tech-multidomain-v1 --split dev --user eval-tech-multidomain-v1 --repetitions 3
-pkb-agent eval run data/evals/tech-multidomain-v1 --split test --user eval-tech-multidomain-v1 --with-agent --repetitions 3
+conda run -n pkb-agent pkb-agent eval validate data/evals/tech-multidomain-v1
+SUPABASE_TIMEOUT=90 conda run -n pkb-agent pkb-agent eval ingest-corpus data/evals/tech-multidomain-v1 --user eval-tech-multidomain-v1 --timeout 90 --attempts 4 --concurrency 2
+
+# Retrieval leaderboard: keep its five-strategy ablation separate from Agent scoring.
+SUPABASE_TIMEOUT=90 conda run -n pkb-agent pkb-agent eval run data/evals/tech-multidomain-v1 --split test --user eval-tech-multidomain-v1 --strategies vector,hybrid,rrf,rewrite_rrf,rewrite_hybrid --repetitions 3
+
+# Agent 1/3 — primary KB-only score: rag_search + rag_read only; no web tools.
+SUPABASE_TIMEOUT=90 conda run -n pkb-agent pkb-agent eval run data/evals/tech-multidomain-v1 --split test --user eval-tech-multidomain-v1 --strategies "" --with-agent --agent-profile kb_only --repetitions 1
+
+# Agent 2/3 — protected-tool refusal: web_fetch is available but confirmation is always denied.
+SUPABASE_TIMEOUT=90 conda run -n pkb-agent pkb-agent eval run data/evals/tech-multidomain-v1 --split test --user eval-tech-multidomain-v1 --strategies "" --with-agent --agent-profile permission --repetitions 1
+
+# Agent 3/3 — separate approved-web acceptance suite; only this exact host is approved.
+SUPABASE_TIMEOUT=90 conda run -n pkb-agent pkb-agent eval run data/evals/tech-web-approved-v1 --split test --user eval-tech-multidomain-v1 --strategies "" --with-agent --agent-profile web_approved --web-allow-host raw.githubusercontent.com --repetitions 1
 
 # Smaller regression baseline.
 # Validate annotations; ingestion verifies exact upstream corpus hashes.
-pkb-agent eval validate data/evals/fastapi-0.115
-pkb-agent eval ingest-corpus data/evals/fastapi-0.115
+conda run -n pkb-agent pkb-agent eval validate data/evals/fastapi-0.115
+conda run -n pkb-agent pkb-agent eval ingest-corpus data/evals/fastapi-0.115
 # On a slow connection, allow longer per-source reads and reduce download concurrency.
-pkb-agent eval ingest-corpus data/evals/fastapi-0.115 --timeout 90 --attempts 4 --concurrency 2
+conda run -n pkb-agent pkb-agent eval ingest-corpus data/evals/fastapi-0.115 --timeout 90 --attempts 4 --concurrency 2
 
 # tune only on dev; keep test frozen until selecting a configuration
-pkb-agent eval run data/evals/fastapi-0.115 --split dev --repetitions 3
-pkb-agent eval run data/evals/fastapi-0.115 --split test --with-agent --repetitions 3
+conda run -n pkb-agent pkb-agent eval run data/evals/fastapi-0.115 --split dev --repetitions 3
+conda run -n pkb-agent pkb-agent eval run data/evals/fastapi-0.115 --split test --with-agent --repetitions 3
 ```
 
 Each run writes `records.jsonl`, `summary.json`, `report.md`, an `index.html`

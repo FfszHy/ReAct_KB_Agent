@@ -107,7 +107,7 @@ export function AnswerPanel({
                     type="button"
                     aria-pressed={selectedCitation?.id === citation.id}
                   >
-                    {citation.source_type === "kb_chunk" ? <FileText size={17} weight="regular" aria-hidden="true" /> : <Globe size={17} weight="regular" aria-hidden="true" />}
+                    {isKnowledgeBaseCitation(citation) ? <FileText size={17} weight="regular" aria-hidden="true" /> : <Globe size={17} weight="regular" aria-hidden="true" />}
                     <span><strong>{citation.title || citation.locator || "未命名来源"}</strong><small>{citation.excerpt || "查看原始证据"}</small></span>
                     <ArrowSquareOut size={16} weight="regular" aria-hidden="true" />
                   </button>
@@ -152,6 +152,10 @@ export function AnswerPanel({
       ) : null}
     </article>
   );
+}
+
+function isKnowledgeBaseCitation(citation: Citation) {
+  return citation.source_type === "kb_chunk" || citation.source_type === "kb_document" || citation.source_type === "kb_catalog";
 }
 
 function ThinkingResponse({ isRunning }: { isRunning: boolean }) {

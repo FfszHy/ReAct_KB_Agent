@@ -21,7 +21,7 @@ def test_profiles_select_disjoint_kb_permission_and_approved_web_cases():
     permission = get_agent_evaluation_profile("permission")
     web_approved = get_agent_evaluation_profile("web_approved")
 
-    assert kb_only.allowed_tools == ("rag_search", "rag_read")
+    assert kb_only.allowed_tools == ("rag_list_documents", "rag_search", "rag_read")
     assert [case.id for case in select_agent_cases(cases, kb_only)] == ["kb", "web"]
     assert [case.id for case in select_agent_cases(cases, permission)] == ["permission"]
     assert [case.id for case in select_agent_cases(cases, web_approved)] == ["web"]

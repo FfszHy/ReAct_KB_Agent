@@ -54,6 +54,8 @@ def test_composer_activates_core_and_tool_scoped_system_prompts():
     assert [ref.id for ref in with_memory.references] == ["system_react", "memory_policy"]
     assert "What to write to memory" not in without_memory.content
     assert "What to write to memory" in with_memory.content
+    assert "rag_list_documents" in without_memory.content
+    assert "KB catalog page" in without_memory.content
     assert "primary user-facing response, not a headline" in without_memory.content
     assert "Use `claims` to audit the detailed answer, not to replace it" in without_memory.content
     assert len(with_memory.references[0].sha256) == 64

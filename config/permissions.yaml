@@ -17,6 +17,10 @@ tools:
     permission: allow
     constraints:
       max_top_k: 20
+  rag_list_documents:
+    permission: allow
+    constraints:
+      max_results: 20
   rag_read:
     permission: allow
   memory_search:

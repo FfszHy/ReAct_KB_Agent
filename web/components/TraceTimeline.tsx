@@ -160,6 +160,7 @@ function describeEvent(event: StreamEvent): { label: string; title: string; deta
 
 function toolLabel(tool: string): string {
   const labels: Record<string, string> = {
+    rag_list_documents: "列出知识库资料",
     rag_search: "检索知识库",
     rag_read: "读取原始 chunk",
     web_search: "网页搜索",

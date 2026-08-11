@@ -304,8 +304,8 @@ def extract_evidence(
     """Build citation-eligible records from a successful tool result.
 
     Search result snippets are not treated as web-page evidence: a page must be
-    fetched through ``web_fetch`` before it can be cited.  KB search previews
-    and reads represent chunks already retrieved in this run and are eligible.
+    fetched through ``web_fetch`` before it can be cited. KB search previews,
+    reads, and catalog pages are eligible evidence observed in this run.
     """
     if not isinstance(result, Mapping):
         return []
@@ -320,6 +320,9 @@ def extract_evidence(
             if record is not None:
                 search_records.append(record)
         return search_records
+    if tool_name == "rag_list_documents":
+        record = _kb_catalog_evidence(result)
+        return [record] if record is not None else []
     if tool_name == "rag_read":
         if result.get("kind") == "chunk":
             record = _kb_evidence(result)
@@ -369,6 +372,44 @@ def _kb_evidence(row: Any) -> Evidence | None:
             for key in ("document_id", "chunk_index", "score", "vector_score", "fts_score")
             if row.get(key) is not None
         },
+    )
+
+
+def _kb_catalog_evidence(result: Mapping[str, Any]) -> Evidence | None:
+    """Represent one catalog page as one compact citation source.
+
+    Each catalog page contains many document metadata rows.  Keeping them in a
+    single evidence record lets a final answer cite a page-level list without
+    duplicating a claim and UUID citation for every individual document.
+    """
+    rows = result.get("items")
+    if not isinstance(rows, list) or not rows:
+        return None
+    offset = _non_negative_int(result.get("offset"), default=0)
+    labels = [
+        _string_or_none(row.get("title"))
+        or _string_or_none(row.get("document_id") or row.get("id"))
+        for row in rows
+        if isinstance(row, Mapping)
+    ]
+    if not labels:
+        return None
+    first_item = offset + 1
+    last_item = offset + len(labels)
+    summary = f"知识库资料目录, 第 {first_item} 至 {last_item} 份资料: " + "; ".join(labels)
+    metadata = {
+        "offset": offset,
+        "count": len(labels),
+        "next_offset": result.get("next_offset"),
+    }
+    return Evidence(
+        citation_id=f"kbcatalog:{offset}",
+        source_type="kb_catalog",
+        source_id=f"catalog:{offset}",
+        title=f"知识库资料目录 - 第 {first_item} 至 {last_item} 份",
+        locator=f"kb://catalog?offset={offset}",
+        excerpt=_truncate_excerpt(summary),
+        metadata=metadata,
     )
 
 
