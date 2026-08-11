@@ -383,6 +383,10 @@ class AgentRuntime:
 
         duration_ms = int((time.time() - started) * 1000)
         step.finish(status="ok" if ok else "error", observation=observation_text)
+        # Keep the same error visible in the in-memory run state as in the
+        # persisted trace.  Evaluation artifacts derive ``tool_errors`` from
+        # state.steps, so omitting this loses permission-denial evidence.
+        step.error = error
         state.record_tool_call(duration_ms, ok=ok)
 
         # Trace (fire-and-forget failures are swallowed inside recorder? no — recorder raises on DB error; let it surface)

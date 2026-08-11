@@ -42,12 +42,13 @@ def test_yaml_web_evidence_policy_maps_to_settings(monkeypatch, tmp_path):
 
 def test_yaml_supabase_proxy_policy_maps_to_settings(monkeypatch, tmp_path):
     config_path = tmp_path / "config.yaml"
-    config_path.write_text("supabase:\n  trust_env: true\n", "utf-8")
+    config_path.write_text("supabase:\n  trust_env: true\n  timeout: 90\n", "utf-8")
     monkeypatch.setenv("PKB_CONFIG_PATH", str(config_path))
 
     settings = Settings(_env_file=None)
 
     assert settings.supabase_trust_env is True
+    assert settings.supabase_timeout == 90
 
 
 def test_deepseek_temperature_environment_override_takes_precedence(monkeypatch):
@@ -56,3 +57,14 @@ def test_deepseek_temperature_environment_override_takes_precedence(monkeypatch)
     settings = Settings(_env_file=None, agent_temperature=0.37)
 
     assert settings.llm_temperature == 0.11
+
+
+def test_default_embedding_batch_size_matches_dashscope_v4_limit(monkeypatch, tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("{}\n", "utf-8")
+    monkeypatch.setenv("PKB_CONFIG_PATH", str(config_path))
+    monkeypatch.delenv("EMBEDDING_BATCH_SIZE", raising=False)
+
+    settings = Settings(_env_file=None)
+
+    assert settings.embedding_batch_size == 10

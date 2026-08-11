@@ -49,7 +49,7 @@ def _markdown(summary: Mapping[str, Any]) -> str:
         "",
         "## Retrieval and engineering comparison",
         "",
-        f"| Strategy | Recall@{k} | MRR@{k} | NDCG@{k} | p50 | p95 | Known LLM cost | Failure rate |",
+        f"| Strategy | Recall@{k} | MRR@{k} | NDCG@{k} | p50 | p95 | Known LLM cost | Execution failure rate |",
         "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for name, raw in strategies.items():
@@ -65,9 +65,95 @@ def _markdown(summary: Mapping[str, Any]) -> str:
                 p50=_ms(engineering.get("p50_latency_ms")),
                 p95=_ms(engineering.get("p95_latency_ms")),
                 cost=_number(engineering.get("mean_known_llm_cost"), digits=6),
-                failure=_percent(engineering.get("failure_rate")),
+                failure=_percent(
+                    engineering.get("execution_failure_rate", engineering.get("failure_rate"))
+                ),
             )
         )
+    retrieval_rows = [
+        (name, _mapping(item)) for name, item in strategies.items() if _mapping(item).get("retrieval")
+    ]
+    if retrieval_rows:
+        lines.extend(
+            [
+                "",
+                "## Bootstrap uncertainty",
+                "",
+                "95% nonparametric percentile bootstrap intervals over unique answerable cases; "
+                "repeated executions are averaged within each case.",
+                "",
+                f"| Strategy | Recall@{k} 95% CI | MRR@{k} 95% CI | NDCG@{k} 95% CI | Cases |",
+                "| --- | ---: | ---: | ---: | ---: |",
+            ]
+        )
+        for name, item in retrieval_rows:
+            retrieval = _mapping(item.get("retrieval"))
+            intervals = _mapping(retrieval.get("confidence_intervals"))
+            lines.append(
+                "| {name} | {recall} | {mrr} | {ndcg} | {cases} |".format(
+                    name=name,
+                    recall=_interval(intervals.get("recall_at_k")),
+                    mrr=_interval(intervals.get("mrr_at_k")),
+                    ndcg=_interval(intervals.get("ndcg_at_k")),
+                    cases=intervals.get("case_count", retrieval.get("evaluated_cases", "—")),
+                )
+            )
+    comparison = _mapping(summary.get("retrieval_comparison"))
+    comparisons = _mapping(comparison.get("comparisons"))
+    if comparisons:
+        baseline = comparison.get("baseline_strategy", "baseline")
+        metric = comparison.get("metric", "ndcg_at_k")
+        lines.extend(
+            [
+                "",
+                "## Case-level wins, losses, and ties",
+                "",
+                f"Each strategy is compared with `{baseline}` on `{metric}`. "
+                "A tie means the per-case score is identical.",
+                "",
+                "| Strategy | Wins | Losses | Ties | Mean delta | 95% CI of delta | Cases |",
+                "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+            ]
+        )
+        for name, raw in comparisons.items():
+            item = _mapping(raw)
+            lines.append(
+                "| {name} | {wins} | {losses} | {ties} | {delta} | {interval} | {cases} |".format(
+                    name=name,
+                    wins=item.get("wins", 0),
+                    losses=item.get("losses", 0),
+                    ties=item.get("ties", 0),
+                    delta=_number(item.get("mean_delta")),
+                    interval=_interval(item.get("delta_confidence_interval")),
+                    cases=item.get("evaluated_cases", 0),
+                )
+            )
+        for name, raw in comparisons.items():
+            item = _mapping(raw)
+            outcomes = item.get("case_outcomes")
+            if not isinstance(outcomes, list):
+                continue
+            lines.extend(
+                [
+                    "",
+                    "<details>",
+                    f"<summary>{name} vs {baseline}: per-case {metric}</summary>",
+                    "",
+                    "| Case | Outcome | Strategy | Baseline |",
+                    "| --- | --- | ---: | ---: |",
+                ]
+            )
+            for raw_outcome in outcomes:
+                outcome = _mapping(raw_outcome)
+                lines.append(
+                    "| {case_id} | {outcome} | {candidate} | {baseline_score} |".format(
+                        case_id=outcome.get("case_id", "—"),
+                        outcome=outcome.get("outcome", "—"),
+                        candidate=_number(outcome.get("candidate_score")),
+                        baseline_score=_number(outcome.get("baseline_score")),
+                    )
+                )
+            lines.extend(["", "</details>"])
     agent_rows = [(name, _mapping(item)) for name, item in strategies.items() if _mapping(item).get("answer")]
     if agent_rows:
         lines.extend(
@@ -98,6 +184,26 @@ def _markdown(summary: Mapping[str, Any]) -> str:
                     success=_percent(agent.get("task_success_rate")),
                 )
             )
+        lines.extend(
+            [
+                "",
+                "## Agent execution states",
+                "",
+                "| Strategy | Execution failure rate | Refusal terminal rate |",
+                "| --- | ---: | ---: |",
+            ]
+        )
+        for name, item in agent_rows:
+            engineering = _mapping(item.get("engineering"))
+            lines.append(
+                "| {name} | {failure} | {refusal} |".format(
+                    name=name,
+                    failure=_percent(
+                        engineering.get("execution_failure_rate", engineering.get("failure_rate"))
+                    ),
+                    refusal=_percent(engineering.get("refusal_terminal_rate")),
+                )
+            )
     lines.extend(
         [
             "",
@@ -106,6 +212,8 @@ def _markdown(summary: Mapping[str, Any]) -> str:
             "- Retrieval metrics are document-level: a wider chunk candidate pool is deduplicated by source before scoring K documents.",
             "- Citation alignment is an automatic source-match proxy, not a semantic entailment claim.",
             "- Human-audit metrics remain blank until the generated audit JSONL is reviewed.",
+            "- A refusal terminal is a normal insufficient-evidence completion, not an engineering failure; use refusal correctness and task success to judge whether it was appropriate.",
+            "- Bootstrap intervals quantify uncertainty in this fixed benchmark, not generalization to arbitrary corpora.",
             "- Known LLM cost covers only usage emitted by the configured provider; it is not an invoice.",
             "",
         ]
@@ -217,6 +325,16 @@ def _as_float(value: Any) -> float | None:
 def _number(value: Any, *, digits: int = 3) -> str:
     parsed = _as_float(value)
     return f"{parsed:.{digits}f}" if parsed is not None else "—"
+
+
+def _interval(value: Any) -> str:
+    interval = _mapping(value)
+    estimate = _as_float(interval.get("estimate"))
+    lower = _as_float(interval.get("lower"))
+    upper = _as_float(interval.get("upper"))
+    if estimate is None or lower is None or upper is None:
+        return "—"
+    return f"{estimate:.3f} [{lower:.3f}, {upper:.3f}]"
 
 
 def _percent(value: Any) -> str:

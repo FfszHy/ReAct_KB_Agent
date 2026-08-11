@@ -7,10 +7,12 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 
+from pkb_agent.agent.state import AgentRunState, AgentStatus
 from pkb_agent.app.settings import Settings
 from pkb_agent.evaluation import corpus as corpus_module
 from pkb_agent.evaluation.corpus import CorpusDocument, CorpusManifest
 from pkb_agent.evaluation.dataset import (
+    AgentExpectation,
     BenchmarkMeta,
     EvalCase,
     EvalDataset,
@@ -20,10 +22,13 @@ from pkb_agent.evaluation.dataset import (
 from pkb_agent.evaluation.metrics import percentile, summarize_records
 from pkb_agent.evaluation.report import write_report
 from pkb_agent.evaluation.runner import (
+    RetrievalAttempt,
     RetrieverStrategy,
     attach_audits,
     document_key_from_uri,
     make_audit_template,
+    run_agent_evaluation,
+    run_retrieval_evaluation,
 )
 from pkb_agent.prompts.query_rewriter import QueryPlan
 from pkb_agent.rag.retriever import SearchHit
@@ -68,6 +73,76 @@ def test_checked_in_fastapi_dataset_has_frozen_50_30_split_and_valid_document_ke
     }.issubset(keys)
 
 
+def test_checked_in_multidomain_dataset_has_pinned_40_document_frozen_test():
+    dataset = EvalDataset.load("data/evals/tech-multidomain-v1")
+    manifest = CorpusManifest.load(dataset.root / dataset.meta.corpus_manifest)
+    keys = {document.key for document in manifest.documents}
+    test_cases = dataset.for_split("test")
+    test_tags = {tag for case in test_cases for tag in case.tags}
+
+    assert len(manifest.documents) == 40
+    assert all(document.sha256 for document in manifest.documents)
+    assert sum(document.key.startswith("pydantic-") for document in manifest.documents) == 10
+    assert sum(document.key.startswith("kubernetes-") for document in manifest.documents) == 10
+    assert sum(document.key.startswith("sqlalchemy-") for document in manifest.documents) == 10
+    assert len(dataset.for_split("dev")) == 80
+    assert len(test_cases) == 120
+    assert sum(case.answerable for case in test_cases) == 88
+    assert sum(not case.answerable for case in test_cases) == 32
+    assert {"multi-document", "paraphrase", "term-ambiguity", "version-trap", "permission", "tool-selection"}.issubset(test_tags)
+    assert {
+        relevant.key
+        for case in dataset.cases
+        for relevant in case.relevant_documents
+    }.issubset(keys)
+
+
+def test_dataset_loads_declared_split_includes(tmp_path: Path):
+    included = tmp_path / "included.dev.jsonl"
+    included.write_text(
+        json.dumps(
+            {
+                "id": "included-case",
+                "question": "What is included?",
+                "answerable": True,
+                "relevant_documents": [{"key": "doc-a", "grade": 2}],
+                "key_facts": [],
+            }
+        )
+        + "\n",
+        "utf-8",
+    )
+    (tmp_path / "benchmark.json").write_text(
+        json.dumps(
+            {
+                "id": "composed",
+                "title": "Composed benchmark",
+                "version": "1",
+                "corpus_manifest": "corpus.json",
+                "split_includes": {"dev": ["included.dev.jsonl"]},
+            }
+        ),
+        "utf-8",
+    )
+    (tmp_path / "questions.dev.jsonl").write_text(
+        json.dumps(
+            {
+                "id": "local-case",
+                "question": "What is local?",
+                "answerable": False,
+                "relevant_documents": [],
+                "key_facts": [],
+            }
+        )
+        + "\n",
+        "utf-8",
+    )
+
+    dataset = EvalDataset.load(tmp_path, splits=("dev",))
+
+    assert [case.id for case in dataset.for_split("dev")] == ["local-case", "included-case"]
+
+
 def test_retrieval_metrics_collapse_duplicate_documents_and_calculate_aggregate_values():
     dataset = _dataset()
     records = [
@@ -104,6 +179,69 @@ def test_retrieval_metrics_collapse_duplicate_documents_and_calculate_aggregate_
     assert metrics["retrieval"]["mrr_at_k"] == 0.75
     assert metrics["engineering"]["p50_latency_ms"] == 30.0
     assert metrics["engineering"]["p95_latency_ms"] == 50.0
+
+
+def test_retrieval_summary_reports_bootstrap_intervals_and_case_outcomes(tmp_path: Path):
+    dataset = EvalDataset(
+        root=Path("."),
+        meta=BenchmarkMeta("unit", "Unit benchmark", "1", "corpus.json", default_top_k=2),
+        cases=tuple(
+            EvalCase(
+                id=case_id,
+                question=f"{case_id}?",
+                answerable=True,
+                relevant_documents=(RelevantDocument(f"doc-{case_id}", 2),),
+            )
+            for case_id in ("win", "loss", "tie")
+        ),
+    )
+    records = [
+        {
+            "kind": "retrieval",
+            "strategy": strategy,
+            "case_id": case_id,
+            "retrieved_document_keys": hits,
+            "duration_ms": 1,
+            "success": True,
+        }
+        for strategy, result_by_case in {
+            "vector": {
+                "win": ["noise"],
+                "loss": ["doc-loss"],
+                "tie": ["doc-tie"],
+            },
+            "hybrid": {
+                "win": ["doc-win"],
+                "loss": ["noise"],
+                "tie": ["doc-tie"],
+            },
+        }.items()
+        for case_id, hits in result_by_case.items()
+    ]
+    records.append(
+        {
+            "kind": "retrieval",
+            "strategy": "hybrid",
+            "case_id": "win",
+            "retrieved_document_keys": ["doc-win"],
+            "duration_ms": 1,
+            "success": True,
+        }
+    )
+
+    summary = summarize_records(dataset, records)
+    intervals = summary["strategies"]["hybrid"]["retrieval"]["confidence_intervals"]
+    comparison = summary["retrieval_comparison"]["comparisons"]["hybrid"]
+    report = write_report(tmp_path / "report", summary)["markdown"].read_text("utf-8")
+
+    assert intervals["case_count"] == 3
+    assert summary["strategies"]["hybrid"]["retrieval"]["evaluated_records"] == 4
+    assert intervals["ndcg_at_k"]["lower"] <= intervals["ndcg_at_k"]["estimate"]
+    assert intervals["ndcg_at_k"]["estimate"] <= intervals["ndcg_at_k"]["upper"]
+    assert (comparison["wins"], comparison["losses"], comparison["ties"]) == (1, 1, 1)
+    assert [item["outcome"] for item in comparison["case_outcomes"]] == ["loss", "tie", "win"]
+    assert "Bootstrap uncertainty" in report
+    assert "Case-level wins, losses, and ties" in report
 
 
 def test_answer_metrics_keep_automatic_alignment_separate_from_human_audit():
@@ -152,6 +290,98 @@ def test_answer_metrics_keep_automatic_alignment_separate_from_human_audit():
     assert answer["human_audit"]["fact_consistency"] == 1.0
 
 
+def test_agent_metrics_score_denied_confirmation_after_selecting_protected_tool():
+    dataset = EvalDataset(
+        root=Path("."),
+        meta=BenchmarkMeta("unit", "Unit benchmark", "1", "corpus.json"),
+        cases=(
+            EvalCase(
+                id="permission",
+                question="Fetch the protected page.",
+                answerable=False,
+                agent=AgentExpectation(
+                    required_all_tools=("web_fetch",),
+                    expected_outcome="refuse",
+                    permission_outcome="confirmation_required",
+                ),
+            ),
+        ),
+    )
+    records = [
+        {
+            "kind": "agent",
+            "strategy": "agent",
+            "case_id": "permission",
+            "tools": ["web_fetch"],
+            "tool_errors": ["web_fetch requires confirmation (not granted)"],
+            "answer_status": "insufficient_evidence",
+            "verification_status": "refused",
+            "duration_ms": 1,
+            "success": False,
+        }
+    ]
+
+    agent = summarize_records(dataset, records)["strategies"]["agent"]["agent"]
+
+    assert agent["tool_selection_correctness"] == 1.0
+    assert agent["permission_refusal_handling"] == 1.0
+    assert agent["task_success_rate"] == 1.0
+
+
+def test_engineering_metrics_keep_refusal_terminals_out_of_execution_failures():
+    dataset = _dataset()
+    records = [
+        {
+            "kind": "agent",
+            "strategy": "agent",
+            "case_id": "negative",
+            "answer_status": "insufficient_evidence",
+            "verification_status": "refused",
+            "duration_ms": 10,
+            "error": None,
+            "execution_success": True,
+            "success": False,
+        },
+        {
+            "kind": "agent",
+            "strategy": "agent",
+            "case_id": "a",
+            "answer_status": "insufficient_evidence",
+            "verification_status": "refused",
+            "duration_ms": 20,
+            "error": "exceeded max_steps=20",
+            "execution_success": False,
+            "success": False,
+        },
+    ]
+
+    engineering = summarize_records(dataset, records)["strategies"]["agent"]["engineering"]
+
+    assert engineering["execution_failure_rate"] == 0.5
+    assert engineering["refusal_terminal_rate"] == 0.5
+    assert engineering["failure_rate"] == 0.5
+
+
+async def test_agent_runner_marks_normal_refusal_as_an_execution_success():
+    state = AgentRunState(question="negative?")
+    state.status = AgentStatus.FINISHED
+    state.answer_payload = {"answer": "Insufficient evidence.", "status": "insufficient_evidence"}
+    state.verification = {"status": "refused"}
+    state.mark_finished()
+
+    class RefusingRuntime:
+        async def run(self, _question: str) -> AgentRunState:
+            return state
+
+    records = await run_agent_evaluation(
+        _dataset().cases[2:],
+        RefusingRuntime(),  # type: ignore[arg-type]
+    )
+
+    assert records[0]["execution_success"] is True
+    assert records[0]["success"] is False
+
+
 def test_report_and_audit_artifacts_are_portable(tmp_path: Path):
     dataset = _dataset()
     records = [
@@ -178,6 +408,8 @@ def test_report_and_audit_artifacts_are_portable(tmp_path: Path):
     assert merged[0]["audit"]["factually_consistent"] is True
     assert all(path.exists() for path in paths.values())
     assert "Retrieval ablation" in paths["chart"].read_text("utf-8")
+    assert "Execution failure rate" in paths["markdown"].read_text("utf-8")
+    assert "Refusal terminal rate" in paths["markdown"].read_text("utf-8")
     assert json.loads(paths["summary"].read_text("utf-8"))["benchmark"]["id"] == "unit"
 
 
@@ -192,6 +424,48 @@ def test_percentile_nearest_rank(values, pct, expected):
 def test_document_key_from_eval_uri_only_accepts_stable_eval_sources():
     assert document_key_from_uri("eval://fastapi-0.115/tutorial/body") == "tutorial/body"
     assert document_key_from_uri("https://example.com/doc") is None
+
+
+async def test_retrieval_runner_reports_per_case_progress():
+    class Strategy:
+        name = "vector"
+
+        async def retrieve(self, question: str, *, top_k: int) -> RetrievalAttempt:
+            return RetrievalAttempt(queries=(question,))
+
+    cases = _dataset().cases[:2]
+    progress: list[tuple[int, int, str, bool]] = []
+
+    records = await run_retrieval_evaluation(
+        cases,
+        Strategy(),  # type: ignore[arg-type]
+        top_k=2,
+        on_progress=lambda completed, total, record: progress.append(
+            (completed, total, str(record["case_id"]), bool(record["success"]))
+        ),
+    )
+
+    assert len(records) == 2
+    assert progress == [(1, 2, "a", True), (2, 2, "b", True)]
+
+
+async def test_agent_runner_reports_progress_when_a_case_errors():
+    class FailingRuntime:
+        async def run(self, _question: str):
+            raise RuntimeError("offline")
+
+    progress: list[tuple[int, int, str, bool]] = []
+
+    records = await run_agent_evaluation(
+        _dataset().cases[:2],
+        FailingRuntime(),  # type: ignore[arg-type]
+        on_progress=lambda completed, total, record: progress.append(
+            (completed, total, str(record["case_id"]), bool(record["success"]))
+        ),
+    )
+
+    assert len(records) == 2
+    assert progress == [(1, 2, "a", False), (2, 2, "b", False)]
 
 
 async def test_corpus_fetch_retries_a_transient_read_timeout(monkeypatch):

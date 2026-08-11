@@ -30,7 +30,14 @@ def format_vector(vec: list[float]) -> str:
 class SupabaseClient:
     """Thin wrapper around the Supabase Python client."""
 
-    def __init__(self, url: str, key: str, *, trust_env: bool = False) -> None:
+    def __init__(
+        self,
+        url: str,
+        key: str,
+        *,
+        trust_env: bool = False,
+        timeout_seconds: float = 60,
+    ) -> None:
         try:
             from supabase import ClientOptions, create_client
         except ImportError as e:  # pragma: no cover
@@ -41,7 +48,10 @@ class SupabaseClient:
         # proxy, which makes every knowledge-base request fail as a 503.
         # Keep this explicit client for the lifetime of this wrapper so it can
         # also be closed deterministically by the API/runtime.
-        self._http_client = httpx.Client(trust_env=trust_env)
+        self._http_client = httpx.Client(
+            trust_env=trust_env,
+            timeout=httpx.Timeout(timeout_seconds),
+        )
         try:
             self._client = create_client(
                 url,
@@ -68,6 +78,7 @@ class SupabaseClient:
             settings.supabase_url,
             key,
             trust_env=settings.supabase_trust_env,
+            timeout_seconds=settings.supabase_timeout,
         )
 
     @property

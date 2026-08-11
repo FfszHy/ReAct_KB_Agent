@@ -5,13 +5,40 @@ from __future__ import annotations
 import httpx
 from tenacity import (
     AsyncRetrying,
-    retry_if_exception_type,
+    retry_if_exception,
     stop_after_attempt,
     wait_exponential,
 )
 
 from pkb_agent.agent.errors import EmbeddingError
 from pkb_agent.app.settings import Settings
+
+
+def _is_retryable_embedding_error(error: BaseException) -> bool:
+    """Retry transient transport/rate-limit/server failures, not invalid requests."""
+    if isinstance(error, httpx.RequestError):
+        return True
+    return isinstance(error, httpx.HTTPStatusError) and (
+        error.response.status_code == 429 or error.response.status_code >= 500
+    )
+
+
+def _provider_error_detail(response: httpx.Response) -> str:
+    """Extract a short provider error without echoing request input or credentials."""
+    try:
+        payload = response.json()
+    except ValueError:
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+    value = payload.get("error")
+    if isinstance(value, dict):
+        value = value.get("message") or value.get("code")
+    if not isinstance(value, str):
+        value = payload.get("message") or payload.get("code")
+    if not isinstance(value, str):
+        return ""
+    return " ".join(value.split())[:500]
 
 
 class EmbeddingProvider:
@@ -79,7 +106,7 @@ class EmbeddingProvider:
             async for attempt in AsyncRetrying(
                 stop=stop_after_attempt(3),
                 wait=wait_exponential(multiplier=0.5, min=0.5, max=4),
-                retry=retry_if_exception_type((httpx.HTTPError,)),
+                retry=retry_if_exception(_is_retryable_embedding_error),
                 reraise=True,
             ):
                 with attempt:
@@ -111,6 +138,14 @@ class EmbeddingProvider:
                                 f"expected {self._dimensions}"
                             )
                     result = embeds
+        except httpx.HTTPStatusError as e:
+            detail = _provider_error_detail(e.response)
+            suffix = f": {detail}" if detail else ""
+            raise EmbeddingError(
+                "embedding API rejected request "
+                f"(HTTP {e.response.status_code}, model={self._model!r}, "
+                f"batch_items={len(texts)}, dimensions={self._dimensions}){suffix}"
+            ) from e
         except httpx.HTTPError as e:
             raise EmbeddingError(f"embedding request failed: {e}") from e
         except EmbeddingError:

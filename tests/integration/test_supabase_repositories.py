@@ -65,6 +65,12 @@ class _FakeQueryBuilder:
         )
         return self
 
+    def in_(self, col: str, values: list[Any]) -> _FakeQueryBuilder:
+        self._client.calls.append(
+            {"op": "in", "table": self._table, "col": col, "values": values}
+        )
+        return self
+
     def order(self, col: str, desc: bool = False) -> _FakeQueryBuilder:
         self._client.calls.append(
             {"op": "order", "table": self._table, "col": col, "desc": desc}
@@ -243,6 +249,22 @@ def test_chunks_create_embeddings_formats_vectors_and_upserts():
     # embedding must be rendered as a pgvector text literal, not a raw list.
     assert payload["embedding"] == "[0.1,0.2,0.3]"
     assert payload["dimensions"] == 3
+
+
+def test_chunks_get_embeddings_by_chunk_ids_returns_metadata_by_chunk():
+    client = _FakeSupabaseClient().queue(
+        [
+            {"chunk_id": "c1", "model": "text-embedding-v4", "dimensions": 1536},
+            {"chunk_id": "c2", "model": "text-embedding-v4", "dimensions": 1536},
+        ]
+    )
+    repo = ChunksRepository(client)
+
+    rows = repo.get_embeddings_by_chunk_ids(["c1", "c2"])
+
+    assert rows["c1"]["dimensions"] == 1536
+    in_call = client.find_call("in", "chunk_embeddings")
+    assert in_call == {"op": "in", "table": "chunk_embeddings", "col": "chunk_id", "values": ["c1", "c2"]}
 
 
 def test_chunks_vector_search_rpc_params_with_formatted_embedding():

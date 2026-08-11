@@ -7,18 +7,25 @@ or network access from the runtime itself.
 
 ## Evaluation-driven RAG optimization
 
-This is not a feature-only RAG demo. The repository contains a reproducible
-benchmark, a five-strategy retrieval ablation, raw per-question records, and a
-human-review sheet for answer grounding. The first public corpus is a pinned
-FastAPI `0.115.0` documentation slice with exact SHA-256 source hashes, 50
-development questions, and a separate frozen 30-question test split (22
-answerable + 8 refusal cases).
+This is not a feature-only RAG demo. The repository contains reproducible
+benchmarks, a five-strategy retrieval ablation, raw per-question records, and a
+human-review sheet for answer grounding. The recommended final benchmark is
+[`tech-multidomain-v1`](data/evals/tech-multidomain-v1/README.md): 40 pinned
+documents across FastAPI, Pydantic, Kubernetes, and SQLAlchemy; an 80-question
+development split; and a separate frozen 120-question test split (88
+answerable + 32 refusal cases). It deliberately includes multi-document,
+paraphrase, terminology-ambiguity, version-trap, unanswerable, protected-tool,
+and tool-selection cases.
 
-![Frozen FastAPI retrieval ablation](data/evals/fastapi-0.115/results/retrieval-test-r3-2026-08-05/comparison.svg)
+The smaller FastAPI `0.115.0` slice remains checked in as a stable regression
+baseline with exact SHA-256 source hashes, 50 development questions, and a
+frozen 30-question test split (22 answerable + 8 refusal cases).
+
+![Frozen FastAPI retrieval ablation](data/evals/fastapi-0.115/results/retrieval-test-r3-2026-08-06-rescored/comparison.svg)
 
 Frozen-test retrieval run (one pass per 30 test questions, document-level
-@6; see the [raw records](data/evals/fastapi-0.115/results/retrieval-test-r3-2026-08-05/records.jsonl)
-and [report](data/evals/fastapi-0.115/results/retrieval-test-r3-2026-08-05/report.md)):
+@6; see the [raw records](data/evals/fastapi-0.115/results/retrieval-test-r3-2026-08-06-rescored/records.jsonl)
+and [rescored report](data/evals/fastapi-0.115/results/retrieval-test-r3-2026-08-06-rescored/report.md)):
 
 | Strategy | Recall@6 | MRR@6 | NDCG@6 | p95 latency | Known LLM cost | Failure rate |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -28,11 +35,14 @@ and [report](data/evals/fastapi-0.115/results/retrieval-test-r3-2026-08-05/repor
 | Query Rewrite + RRF | 0.955 | 0.932 | 0.925 | 6.85 s | ¥0.000451 | 0.0% |
 | Query Rewrite + Hybrid | 1.000 | **1.000** | **0.988** | 5.29 s | ¥0.000436 | 0.0% |
 
-The measured non-LLM default remains **Vector + normalized FTS**. The
-**Query Rewrite + Hybrid** variant improves this small frozen test by one
-first-relevant-document ranking (MRR 0.977 → 1.000), but adds about 1.5× p95
-latency and ¥0.000436 per question. With only 22 answerable test cases, it
-remains an ablation rather than a justified new default. This run retained two transient Supabase RPC
+The measured non-LLM default remains **Vector + normalized FTS** on this small
+FastAPI baseline. The **Query Rewrite + Hybrid** variant improves this small
+frozen test by one first-relevant-document ranking (MRR 0.977 → 1.000), but
+adds about 1.5× p95 latency and ¥0.000436 per question. Its NDCG@6 delta versus
+Vector is +0.138 with a 95% bootstrap interval of [0.031, 0.273], calculated
+over the same 22 answerable questions; the rescored report also exposes every
+win/loss/tie. This remains an ablation rather than a justified new default or
+a claim about other corpora. The run retained two transient Supabase RPC
 timeouts for Vector only instead of hiding them. “Known LLM cost” is completed
 usage for query rewrite only, excluding embedding-provider billing, so it is
 not presented as a full invoice.
@@ -45,7 +55,14 @@ blank until the generated audit sheet is reviewed by a human; a matching source
 document alone is deliberately not treated as proof of entailment.
 
 ```bash
-# validate annotations; ingestion verifies exact upstream corpus hashes
+# Recommended final benchmark: validate annotations; ingestion verifies exact upstream corpus hashes.
+pkb-agent eval validate data/evals/tech-multidomain-v1
+SUPABASE_TIMEOUT=90 pkb-agent eval ingest-corpus data/evals/tech-multidomain-v1 --user eval-tech-multidomain-v1 --timeout 90 --attempts 4 --concurrency 2
+pkb-agent eval run data/evals/tech-multidomain-v1 --split dev --user eval-tech-multidomain-v1 --repetitions 3
+pkb-agent eval run data/evals/tech-multidomain-v1 --split test --user eval-tech-multidomain-v1 --with-agent --repetitions 3
+
+# Smaller regression baseline.
+# Validate annotations; ingestion verifies exact upstream corpus hashes.
 pkb-agent eval validate data/evals/fastapi-0.115
 pkb-agent eval ingest-corpus data/evals/fastapi-0.115
 # On a slow connection, allow longer per-source reads and reduce download concurrency.
@@ -265,6 +282,9 @@ The embedding client speaks the OpenAI-compatible `/embeddings` protocol, so it
 works with DashScope (default: `text-embedding-v4` / 1536 dims), OpenAI,
 SiliconFlow, or any local server. Set `EMBEDDING_API_BASE_URL`,
 `EMBEDDING_MODEL`, and `EMBEDDING_DIMENSIONS` accordingly.
+For DashScope `text-embedding-v3`/`v4`, keep `EMBEDDING_BATCH_SIZE=10` (the
+provider accepts at most 10 input strings per request); other compatible
+providers may override the batch size when their limits differ.
 
 ## License
 

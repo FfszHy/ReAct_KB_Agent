@@ -199,6 +199,11 @@ class AgentRunState:
         end = self.ended_at or _now()
         duration_ms = max(int((end - self.created_at).total_seconds() * 1000), 0)
         verification_status = str(self.verification.get("status") or "")
+        # A run that deliberately refuses for lack of evidence is a completed
+        # execution, even though it is not a grounded answer.  Keep this
+        # separate from ``run_succeeded``, which intentionally remains the
+        # stricter grounded-and-verified outcome used by the product UI.
+        execution_succeeded = self.status == AgentStatus.FINISHED and self.error is None
         run_succeeded = self.status == AgentStatus.FINISHED and verification_status == "verified"
         tool_success_rate = (
             round(self.successful_tool_call_count / self.tool_call_count * 100, 1)
@@ -211,6 +216,7 @@ class AgentRunState:
             "tool_call_count": self.tool_call_count,
             "successful_tool_call_count": self.successful_tool_call_count,
             "tool_success_rate": tool_success_rate,
+            "execution_succeeded": execution_succeeded,
             "run_succeeded": run_succeeded,
             "run_success_rate": 100.0 if run_succeeded else 0.0,
             "usage": dict(self.usage),
@@ -244,6 +250,8 @@ def _serialize_evidence(record: Evidence) -> dict:
 
 def _non_negative_int(value: object) -> int:
     try:
+        if not isinstance(value, (int, float, str, bytes, bytearray)):
+            return 0
         return max(int(value), 0)
     except (TypeError, ValueError):
         return 0

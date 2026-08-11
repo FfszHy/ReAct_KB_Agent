@@ -10,11 +10,16 @@ into a quality claim.
 from __future__ import annotations
 
 import math
+import random
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
 from typing import Any
 
 from pkb_agent.evaluation.dataset import EvalCase, EvalDataset
+
+_BOOTSTRAP_RESAMPLES = 2_000
+_BOOTSTRAP_CONFIDENCE_LEVEL = 0.95
+_PRIMARY_COMPARISON_METRIC = "ndcg_at_k"
 
 
 def percentile(values: Iterable[float | int], percentile_value: float) -> float | None:
@@ -53,6 +58,7 @@ def summarize_records(
             recorded_splits.add(split)
 
     strategies: dict[str, Any] = {}
+    retrieval_case_scores: dict[str, dict[str, dict[str, float]]] = {}
     for name, rows in sorted(grouped.items()):
         retrieval_rows = [row for row in rows if row.get("kind") == "retrieval"]
         agent_rows = [row for row in rows if row.get("kind") == "agent"]
@@ -61,12 +67,14 @@ def summarize_records(
             "engineering": _engineering_metrics(rows),
         }
         if retrieval_rows:
-            payload["retrieval"] = _retrieval_metrics(cases, retrieval_rows, k=k)
+            retrieval, case_scores = _retrieval_metrics(cases, retrieval_rows, k=k)
+            payload["retrieval"] = retrieval
+            retrieval_case_scores[name] = case_scores
         if agent_rows:
             payload["answer"] = _answer_metrics(cases, agent_rows)
             payload["agent"] = _agent_metrics(cases, agent_rows)
         strategies[name] = payload
-    return {
+    summary: dict[str, Any] = {
         "schema_version": 1,
         "benchmark": {
             "id": dataset.meta.id,
@@ -81,45 +89,168 @@ def summarize_records(
         },
         "strategies": strategies,
     }
+    if retrieval_case_scores:
+        summary["retrieval_comparison"] = _pairwise_retrieval_comparison(retrieval_case_scores)
+    return summary
 
 
 def _retrieval_metrics(
-    cases: Mapping[str, EvalCase], rows: Iterable[Mapping[str, Any]], *, k: int) -> dict[str, Any]:
-    recalls: list[float] = []
-    reciprocal_ranks: list[float] = []
-    ndcgs: list[float] = []
-    evaluated = 0
+    cases: Mapping[str, EvalCase], rows: Iterable[Mapping[str, Any]], *, k: int
+) -> tuple[dict[str, Any], dict[str, dict[str, float]]]:
+    """Score unique answerable cases, averaging repeated executions within case."""
+    per_case_scores: dict[str, list[dict[str, float]]] = defaultdict(list)
     missing_cases = 0
+    skipped_unanswerable_ids: set[str] = set()
     for row in rows:
         case = cases.get(str(row.get("case_id") or ""))
         if case is None or not case.answerable or not case.relevant_documents:
             if case is None:
                 missing_cases += 1
+            elif not case.answerable:
+                skipped_unanswerable_ids.add(case.id)
             continue
         expected = case.relevance_by_document
         ranked = _unique_texts(row.get("retrieved_document_keys"))[:k]
         retrieved_expected = set(ranked) & set(expected)
-        recalls.append(len(retrieved_expected) / len(expected))
-        reciprocal_ranks.append(_reciprocal_rank(ranked, expected))
-        ndcgs.append(_ndcg(ranked, expected, k=k))
-        evaluated += 1
-    return {
+        per_case_scores[case.id].append(
+            {
+                "recall_at_k": len(retrieved_expected) / len(expected),
+                "mrr_at_k": _reciprocal_rank(ranked, expected),
+                "ndcg_at_k": _ndcg(ranked, expected, k=k),
+            }
+        )
+
+    case_scores = {
+        case_id: {
+            metric: round(sum(row[metric] for row in scores) / len(scores), 6)
+            for metric in ("recall_at_k", "mrr_at_k", "ndcg_at_k")
+        }
+        for case_id, scores in per_case_scores.items()
+    }
+    recalls = [scores["recall_at_k"] for scores in case_scores.values()]
+    reciprocal_ranks = [scores["mrr_at_k"] for scores in case_scores.values()]
+    ndcgs = [scores["ndcg_at_k"] for scores in case_scores.values()]
+    metrics = {
         "definition": (
             "Document-level macro metrics; each strategy retrieves a wider chunk candidate pool, "
             "then duplicate chunks from the same source are collapsed before ranking. Recall@K is "
-            "the fraction of annotated relevant documents retrieved."
+            "the fraction of annotated relevant documents retrieved. Repeated runs are averaged "
+            "within each case before aggregation."
         ),
         "k": k,
-        "evaluated_cases": evaluated,
-        "skipped_unanswerable_cases": sum(
-            1
-            for row in rows
-            if (case := cases.get(str(row.get("case_id") or ""))) is not None and not case.answerable
-        ),
+        "evaluated_cases": len(case_scores),
+        "evaluated_records": sum(len(scores) for scores in per_case_scores.values()),
+        "skipped_unanswerable_cases": len(skipped_unanswerable_ids),
         "unknown_case_records": missing_cases,
         "recall_at_k": _mean(recalls),
         "mrr_at_k": _mean(reciprocal_ranks),
         "ndcg_at_k": _mean(ndcgs),
+        "confidence_intervals": _bootstrap_confidence_intervals(case_scores),
+    }
+    return metrics, case_scores
+
+
+def _bootstrap_confidence_intervals(
+    case_scores: Mapping[str, Mapping[str, float]],
+) -> dict[str, Any]:
+    """Return deterministic percentile bootstrap intervals over unique cases."""
+    intervals = {
+        metric: _bootstrap_interval(
+            [scores[metric] for scores in case_scores.values()],
+            seed=f"retrieval:{metric}:{','.join(sorted(case_scores))}",
+        )
+        for metric in ("recall_at_k", "mrr_at_k", "ndcg_at_k")
+    }
+    return {
+        "method": "nonparametric percentile bootstrap over unique answerable cases",
+        "confidence_level": _BOOTSTRAP_CONFIDENCE_LEVEL,
+        "resamples": _BOOTSTRAP_RESAMPLES,
+        "case_count": len(case_scores),
+        **intervals,
+    }
+
+
+def _bootstrap_interval(values: Iterable[float], *, seed: str) -> dict[str, float] | None:
+    values = list(values)
+    if not values:
+        return None
+    estimate = _mean(values)
+    if len(values) == 1:
+        assert estimate is not None
+        return {"estimate": estimate, "lower": estimate, "upper": estimate}
+    rng = random.Random(seed)
+    sample_size = len(values)
+    samples = [
+        sum(values[rng.randrange(sample_size)] for _ in range(sample_size)) / sample_size
+        for _ in range(_BOOTSTRAP_RESAMPLES)
+    ]
+    lower_tail = (1 - _BOOTSTRAP_CONFIDENCE_LEVEL) / 2 * 100
+    upper_tail = (1 + _BOOTSTRAP_CONFIDENCE_LEVEL) / 2 * 100
+    lower = percentile(samples, lower_tail)
+    upper = percentile(samples, upper_tail)
+    assert estimate is not None and lower is not None and upper is not None
+    return {
+        "estimate": estimate,
+        "lower": round(lower, 6),
+        "upper": round(upper, 6),
+    }
+
+
+def _pairwise_retrieval_comparison(
+    strategies: Mapping[str, Mapping[str, Mapping[str, float]]],
+) -> dict[str, Any]:
+    """Compare every retrieval strategy with Vector on the same unique cases."""
+    names = sorted(strategies)
+    baseline = "vector" if "vector" in strategies else names[0]
+    baseline_scores = strategies[baseline]
+    comparisons: dict[str, Any] = {}
+    for name in names:
+        if name == baseline:
+            continue
+        candidate_scores = strategies[name]
+        case_ids = sorted(set(baseline_scores) & set(candidate_scores))
+        outcomes: list[dict[str, Any]] = []
+        deltas: list[float] = []
+        wins = losses = ties = 0
+        for case_id in case_ids:
+            baseline_score = baseline_scores[case_id][_PRIMARY_COMPARISON_METRIC]
+            candidate_score = candidate_scores[case_id][_PRIMARY_COMPARISON_METRIC]
+            delta = candidate_score - baseline_score
+            if delta > 1e-12:
+                outcome = "win"
+                wins += 1
+            elif delta < -1e-12:
+                outcome = "loss"
+                losses += 1
+            else:
+                outcome = "tie"
+                ties += 1
+            deltas.append(delta)
+            outcomes.append(
+                {
+                    "case_id": case_id,
+                    "outcome": outcome,
+                    "candidate_score": candidate_score,
+                    "baseline_score": baseline_score,
+                }
+            )
+        comparisons[name] = {
+            "evaluated_cases": len(case_ids),
+            "wins": wins,
+            "losses": losses,
+            "ties": ties,
+            "mean_delta": _mean(deltas),
+            "delta_confidence_interval": _bootstrap_interval(
+                deltas,
+                seed=f"comparison:{baseline}:{name}:{','.join(case_ids)}",
+            ),
+            "case_outcomes": outcomes,
+        }
+    return {
+        "baseline_strategy": baseline,
+        "metric": _PRIMARY_COMPARISON_METRIC,
+        "unit": "unique answerable case; repeated runs are averaged within case",
+        "comparisons": comparisons,
     }
 
 
@@ -235,15 +366,28 @@ def _agent_metrics(cases: Mapping[str, EvalCase], rows: Iterable[Mapping[str, An
 
 def _engineering_metrics(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
     rows = list(rows)
-    durations = [_as_float(row.get("duration_ms")) for row in rows]
-    durations = [value for value in durations if value is not None]
-    costs = [_as_float(row.get("known_llm_cost")) for row in rows]
-    costs = [value for value in costs if value is not None]
-    failures = sum(
-        bool(row.get("error")) or row.get("success") is False
+    durations = [
+        value
         for row in rows
+        if (value := _as_float(row.get("duration_ms"))) is not None
+    ]
+    costs = [
+        value
+        for row in rows
+        if (value := _as_float(row.get("known_llm_cost"))) is not None
+    ]
+    execution_failures = sum(_is_execution_failure(row) for row in rows)
+    agent_rows = [row for row in rows if row.get("kind") == "agent"]
+    refusal_terminals = sum(
+        _is_refusal_terminal(row) and not _is_execution_failure(row)
+        for row in agent_rows
     )
     return {
+        "definition": (
+            "Execution failure means a recorded runtime error or explicit execution failure. "
+            "A normal insufficient-evidence refusal is reported separately and is not an "
+            "engineering failure; its correctness is scored by the answer and agent metrics."
+        ),
         "record_count": len(rows),
         "p50_latency_ms": percentile(durations, 50),
         "p95_latency_ms": percentile(durations, 95),
@@ -251,8 +395,33 @@ def _engineering_metrics(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
         "mean_known_llm_cost": _mean(costs),
         "total_known_llm_cost": round(sum(costs), 8) if costs else 0.0,
         "cost_record_count": len(costs),
-        "failure_rate": _ratio(failures, len(rows)),
+        "execution_failure_rate": _ratio(execution_failures, len(rows)),
+        "refusal_terminal_rate": _ratio(refusal_terminals, len(agent_rows)) if agent_rows else None,
+        # Kept as a compatibility alias for existing consumers.  Its meaning
+        # is now aligned with the report label instead of conflating a safe
+        # refusal with an execution failure.
+        "failure_rate": _ratio(execution_failures, len(rows)),
     }
+
+
+def _is_execution_failure(row: Mapping[str, Any]) -> bool:
+    """Classify runtime failures without treating a safe Agent refusal as one."""
+    if bool(row.get("error")):
+        return True
+    if "execution_success" in row:
+        return row.get("execution_success") is False
+    # Retrieval artifacts before the explicit execution field used ``success``
+    # for this meaning.  Older Agent records used it for a grounded-answer
+    # outcome, so they deliberately fall through as non-failures when no error
+    # was recorded.
+    return row.get("kind") != "agent" and row.get("success") is False
+
+
+def _is_refusal_terminal(row: Mapping[str, Any]) -> bool:
+    return (
+        str(row.get("answer_status") or "") == "insufficient_evidence"
+        or str(row.get("verification_status") or "") == "refused"
+    )
 
 
 def _reciprocal_rank(ranked: list[str], relevance: Mapping[str, int]) -> float:

@@ -30,7 +30,9 @@ evaluation:
   document_candidate_multiplier: 3
 
 embedding:
-  batch_size: 64
+  # DashScope text-embedding-v4 allows at most 10 input strings per request.
+  # Override only when the configured provider supports a larger batch.
+  batch_size: 10
   timeout: 60
 
 web:
@@ -80,6 +82,8 @@ api:
 # proxy such as 127.0.0.1:7897. Set true only when Supabase must use a proxy.
 supabase:
   trust_env: false
+  # Applies to PostgREST reads/writes; corpus --timeout controls only upstream downloads.
+  timeout: 60
 
 # Cost is an estimate, not a provider invoice. These are the DeepSeek V4 Flash
 # CNY rates supplied for this workspace, in CNY per one million tokens. Change

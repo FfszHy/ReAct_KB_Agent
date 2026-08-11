@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,15 @@ from typing import Any
 import typer
 from rich.console import Console
 from rich.panel import Panel
+from rich.progress import (
+    BarColumn,
+    Progress,
+    SpinnerColumn,
+    TaskProgressColumn,
+    TextColumn,
+    TimeElapsedColumn,
+    TimeRemainingColumn,
+)
 from rich.text import Text
 
 from pkb_agent.agent.runtime import AgentRuntime
@@ -333,66 +343,143 @@ def eval_run(
         settings.require_llm()
     settings.require_supabase()
     settings.require_embedding()
+    retrieval_case_runs = len(selected_cases) * len(strategy_names) * repetitions
+    agent_case_runs = len(selected_cases) * repetitions if with_agent else 0
+    total_case_runs = retrieval_case_runs + agent_case_runs
+    rewrite_case_runs = len(selected_cases) * repetitions * len(
+        rewrite_strategies.intersection(strategy_names)
+    )
+    start_details = (
+        f"{len(selected_cases)} cases · {len(strategy_names)} retrieval strategies · "
+        f"{repetitions} repetition(s) = {retrieval_case_runs} retrieval case-runs"
+    )
+    if with_agent:
+        start_details += f" + {agent_case_runs} agent case-runs"
+    if rewrite_case_runs:
+        start_details += f" · {rewrite_case_runs} Query Rewrite calls"
+    console.print(f"[cyan]starting evaluation[/cyan] {start_details}")
 
     async def _run() -> list[dict[str, Any]]:
         all_records: list[dict[str, Any]] = []
+        completed_case_runs = 0
+        execution_failed_case_runs = 0
+        non_interactive_interval = max(1, len(selected_cases) // 10)
+        progress = Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            "•",
+            TimeElapsedColumn(),
+            "• ETA",
+            TimeRemainingColumn(),
+            "• execution errors: {task.fields[execution_errors]}",
+            console=console,
+            disable=not console.is_terminal,
+        )
+
+        def make_progress_callback(label: str):
+            def on_progress(completed: int, total: int, record: Mapping[str, Any]) -> None:
+                nonlocal completed_case_runs, execution_failed_case_runs
+                completed_case_runs += 1
+                execution_success = record.get("execution_success", record.get("success"))
+                if execution_success is False or bool(record.get("error")):
+                    execution_failed_case_runs += 1
+                description = f"{label} · {completed}/{total} · {record['case_id']}"
+                progress.update(
+                    progress_task,
+                    completed=completed_case_runs,
+                    description=description,
+                    execution_errors=execution_failed_case_runs,
+                )
+                if not console.is_terminal and (
+                    completed == total or completed % non_interactive_interval == 0
+                ):
+                    console.print(
+                        f"[cyan]progress[/cyan] {description} · overall "
+                        f"{completed_case_runs}/{total_case_runs} · "
+                        f"execution_errors={execution_failed_case_runs}"
+                    )
+
+            return on_progress
+
         client = SupabaseClient.from_settings(settings)
         embedder = EmbeddingProvider.from_settings(settings)
         llm: DeepSeekClient | None = None
-        try:
-            retriever = Retriever.from_settings(settings, embedder, ChunksRepository(client))
-            if rewrite_strategies.intersection(strategy_names):
-                llm = DeepSeekClient.from_settings(settings)
-                composer = PromptComposer(PromptRegistry.from_settings(settings))
-            else:
-                composer = None
-            for iteration in range(1, repetitions + 1):
-                for strategy_name in strategy_names:
-                    planner = (
-                        QueryPlanner(
-                            llm,
-                            composer,
-                            enabled=True,
-                            max_queries=settings.prompts_query_rewrite_max_queries,
+        with progress:
+            progress_task = progress.add_task(
+                "preparing evaluation",
+                total=total_case_runs,
+                execution_errors=0,
+            )
+            try:
+                retriever = Retriever.from_settings(settings, embedder, ChunksRepository(client))
+                if rewrite_strategies.intersection(strategy_names):
+                    llm = DeepSeekClient.from_settings(settings)
+                    composer = PromptComposer(PromptRegistry.from_settings(settings))
+                else:
+                    composer = None
+                for iteration in range(1, repetitions + 1):
+                    for strategy_name in strategy_names:
+                        label = f"retrieval {iteration}/{repetitions} · {strategy_name}"
+                        progress.update(progress_task, description=f"{label} · starting")
+                        planner = (
+                            QueryPlanner(
+                                llm,
+                                composer,
+                                enabled=True,
+                                max_queries=settings.prompts_query_rewrite_max_queries,
+                            )
+                            if strategy_name in rewrite_strategies and llm is not None and composer is not None
+                            else None
                         )
-                        if strategy_name in rewrite_strategies and llm is not None and composer is not None
-                        else None
-                    )
-                    strategy = RetrieverStrategy(
-                        strategy_name,
-                        retriever,
-                        user_id=user_id,
-                        planner=planner,
-                        settings=settings,
-                        candidate_multiplier=candidate_multiplier,
-                    )
-                    rows = await run_retrieval_evaluation(selected_cases, strategy, top_k=k)
+                        strategy = RetrieverStrategy(
+                            strategy_name,
+                            retriever,
+                            user_id=user_id,
+                            planner=planner,
+                            settings=settings,
+                            candidate_multiplier=candidate_multiplier,
+                        )
+                        rows = await run_retrieval_evaluation(
+                            selected_cases,
+                            strategy,
+                            top_k=k,
+                            on_progress=make_progress_callback(label),
+                        )
+                        for row in rows:
+                            row["iteration"] = iteration
+                        all_records.extend(rows)
+                        progress.console.print(
+                            f"[green]completed[/green] {label} · {len(rows)} cases"
+                        )
+            finally:
+                if llm is not None:
+                    await llm.close()
+                await embedder.close()
+                client.close()
+
+            if with_agent:
+                agent_strategy_name = (
+                    "agent_rewrite_hybrid"
+                    if settings.prompts_query_rewrite_enabled
+                    else "agent_hybrid"
+                )
+                for iteration in range(1, repetitions + 1):
+                    label = f"agent {iteration}/{repetitions} · {agent_strategy_name}"
+                    progress.update(progress_task, description=f"{label} · starting")
+                    runtime = AgentRuntime.build(settings, user_id=user_id, confirm=lambda _tool, _args: False)
+                    async with runtime:
+                        rows = await run_agent_evaluation(
+                            selected_cases,
+                            runtime,
+                            strategy_name=agent_strategy_name,
+                            on_progress=make_progress_callback(label),
+                        )
                     for row in rows:
                         row["iteration"] = iteration
                     all_records.extend(rows)
-        finally:
-            if llm is not None:
-                await llm.close()
-            await embedder.close()
-            client.close()
-
-        if with_agent:
-            agent_strategy_name = (
-                "agent_rewrite_hybrid"
-                if settings.prompts_query_rewrite_enabled
-                else "agent_hybrid"
-            )
-            for iteration in range(1, repetitions + 1):
-                runtime = AgentRuntime.build(settings, user_id=user_id, confirm=lambda _tool, _args: False)
-                async with runtime:
-                    rows = await run_agent_evaluation(
-                        selected_cases,
-                        runtime,
-                        strategy_name=agent_strategy_name,
-                    )
-                for row in rows:
-                    row["iteration"] = iteration
-                all_records.extend(rows)
+                    progress.console.print(f"[green]completed[/green] {label} · {len(rows)} cases")
         return all_records
 
     records = asyncio.run(_run())

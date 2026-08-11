@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import Any, ClassVar, Protocol
 
@@ -22,6 +22,9 @@ class RetrievalStrategy(Protocol):
     name: str
 
     async def retrieve(self, question: str, *, top_k: int) -> RetrievalAttempt: ...
+
+
+EvaluationProgressCallback = Callable[[int, int, Mapping[str, Any]], None]
 
 
 class RetrievalAttempt:
@@ -131,32 +134,37 @@ async def run_retrieval_evaluation(
     strategy: RetrievalStrategy,
     *,
     top_k: int,
+    on_progress: EvaluationProgressCallback | None = None,
 ) -> list[dict[str, Any]]:
     """Run one strategy over a fixed suite, retaining raw rankings for review."""
+    case_list = tuple(cases)
+    total_cases = len(case_list)
     records: list[dict[str, Any]] = []
-    for case in cases:
+    for completed_cases, case in enumerate(case_list, start=1):
         started = time.perf_counter()
         attempt = await strategy.retrieve(case.question, top_k=top_k)
         duration_ms = round((time.perf_counter() - started) * 1000, 3)
-        records.append(
-            {
-                "schema_version": 1,
-                "kind": "retrieval",
-                "strategy": strategy.name,
-                "case_id": case.id,
-                "split": case.split,
-                "question": case.question,
-                "answerable": case.answerable,
-                "top_k": top_k,
-                "queries": list(attempt.queries),
-                "retrieved_document_keys": _document_keys_from_hits(attempt.hits),
-                "hits": [_serialize_hit(hit) for hit in attempt.hits],
-                "duration_ms": duration_ms,
-                "known_llm_cost": attempt.known_llm_cost,
-                "error": attempt.error,
-                "success": attempt.error is None,
-            }
-        )
+        record = {
+            "schema_version": 1,
+            "kind": "retrieval",
+            "strategy": strategy.name,
+            "case_id": case.id,
+            "split": case.split,
+            "question": case.question,
+            "answerable": case.answerable,
+            "top_k": top_k,
+            "queries": list(attempt.queries),
+            "retrieved_document_keys": _document_keys_from_hits(attempt.hits),
+            "hits": [_serialize_hit(hit) for hit in attempt.hits],
+            "duration_ms": duration_ms,
+            "known_llm_cost": attempt.known_llm_cost,
+            "error": attempt.error,
+            "execution_success": attempt.error is None,
+            "success": attempt.error is None,
+        }
+        records.append(record)
+        if on_progress is not None:
+            on_progress(completed_cases, total_cases, record)
     return records
 
 
@@ -165,42 +173,18 @@ async def run_agent_evaluation(
     runtime: AgentRuntime,
     *,
     strategy_name: str = "agent",
+    on_progress: EvaluationProgressCallback | None = None,
 ) -> list[dict[str, Any]]:
     """Execute end-to-end AgentRuntime cases and preserve trace-derived labels."""
+    case_list = tuple(cases)
+    total_cases = len(case_list)
     records: list[dict[str, Any]] = []
-    for case in cases:
+    for completed_cases, case in enumerate(case_list, start=1):
         started = time.perf_counter()
         try:
             state = await runtime.run(case.question)
         except Exception as exc:
-            records.append(
-                {
-                    "schema_version": 1,
-                    "kind": "agent",
-                    "strategy": strategy_name,
-                    "case_id": case.id,
-                    "split": case.split,
-                    "question": case.question,
-                    "answerable": case.answerable,
-                    "duration_ms": round((time.perf_counter() - started) * 1000, 3),
-                    "known_llm_cost": None,
-                    "tools": [],
-                    "tool_errors": [],
-                    "cited_document_keys": [],
-                    "citations": [],
-                    "answer_status": "",
-                    "verification_status": "",
-                    "error": f"{type(exc).__name__}: {exc}",
-                    "success": False,
-                }
-            )
-            continue
-
-        payload = state.answer_payload if isinstance(state.answer_payload, dict) else {}
-        citations = payload.get("citations") if isinstance(payload.get("citations"), list) else []
-        citation_rows = [item for item in citations if isinstance(item, dict)]
-        records.append(
-            {
+            record = {
                 "schema_version": 1,
                 "kind": "agent",
                 "strategy": strategy_name,
@@ -209,19 +193,54 @@ async def run_agent_evaluation(
                 "question": case.question,
                 "answerable": case.answerable,
                 "duration_ms": round((time.perf_counter() - started) * 1000, 3),
-                "known_llm_cost": _float_or_none(state.usage.get("actual_cost")),
-                "tools": [step.tool_call.name for step in state.steps if step.tool_call is not None],
-                "tool_errors": [step.error for step in state.steps if isinstance(step.error, str)],
-                "cited_document_keys": _document_keys_from_citations(citation_rows),
-                "citations": [_serialize_citation(item) for item in citation_rows],
-                "answer_status": str(payload.get("status") or ""),
-                "verification_status": str(state.verification.get("status") or ""),
-                "answer": payload.get("answer"),
-                "claims": payload.get("claims") if isinstance(payload.get("claims"), list) else [],
-                "error": state.error,
-                "success": bool(state.metrics().get("run_succeeded")),
+                "known_llm_cost": None,
+                "tools": [],
+                "tool_errors": [],
+                "cited_document_keys": [],
+                "citations": [],
+                "answer_status": "",
+                "verification_status": "",
+                "error": f"{type(exc).__name__}: {exc}",
+                "execution_success": False,
+                "success": False,
             }
-        )
+            records.append(record)
+            if on_progress is not None:
+                on_progress(completed_cases, total_cases, record)
+            continue
+
+        payload = state.answer_payload if isinstance(state.answer_payload, dict) else {}
+        raw_citations = payload.get("citations")
+        citations = raw_citations if isinstance(raw_citations, list) else []
+        citation_rows = [item for item in citations if isinstance(item, dict)]
+        record = {
+            "schema_version": 1,
+            "kind": "agent",
+            "strategy": strategy_name,
+            "case_id": case.id,
+            "split": case.split,
+            "question": case.question,
+            "answerable": case.answerable,
+            "duration_ms": round((time.perf_counter() - started) * 1000, 3),
+            "known_llm_cost": _float_or_none(state.usage.get("actual_cost")),
+            "tools": [step.tool_call.name for step in state.steps if step.tool_call is not None],
+            "tool_errors": [step.error for step in state.steps if isinstance(step.error, str)],
+            "cited_document_keys": _document_keys_from_citations(citation_rows),
+            "citations": [_serialize_citation(item) for item in citation_rows],
+            "answer_status": str(payload.get("status") or ""),
+            "verification_status": str(state.verification.get("status") or ""),
+            "answer": payload.get("answer"),
+            "claims": payload.get("claims") if isinstance(payload.get("claims"), list) else [],
+            "error": state.error,
+            # A normal insufficient-evidence response is an execution success
+            # and must not be counted as an infrastructure failure.  ``success``
+            # remains the stricter grounded-answer result for compatibility.
+            "execution_success": bool(state.metrics().get("execution_succeeded")),
+            "success": bool(state.metrics().get("run_succeeded")),
+        }
+        records.append(record)
+        if on_progress is not None:
+            on_progress(completed_cases, total_cases, record)
     return records
 
 
@@ -291,10 +310,10 @@ def attach_audits(
 ) -> list[dict[str, Any]]:
     """Join reviewer labels by case ID without changing original raw artifacts."""
     by_id: dict[str, dict[str, Any]] = {}
-    for audit in audits:
-        case_id = audit.get("case_id")
+    for audit_record in audits:
+        case_id = audit_record.get("case_id")
         if isinstance(case_id, str) and case_id.strip():
-            by_id[case_id.strip()] = dict(audit)
+            by_id[case_id.strip()] = dict(audit_record)
     merged: list[dict[str, Any]] = []
     for record in records:
         item = dict(record)

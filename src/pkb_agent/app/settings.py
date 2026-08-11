@@ -106,13 +106,18 @@ class Settings(BaseSettings):
     # inherit an editor/shell proxy (often a stale localhost proxy) unless the
     # deployment explicitly opts in with ``SUPABASE_TRUST_ENV=true``.
     supabase_trust_env: bool = False
+    # PostgREST reads may join chunks and embeddings during resumable
+    # ingestion; avoid HTTPX's short default timeout on slow connections.
+    supabase_timeout: int = Field(default=60, ge=1)
 
     # Embedding (OpenAI-compatible /embeddings endpoint)
     embedding_api_key: str = ""
     embedding_api_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     embedding_model: str = "text-embedding-v4"
     embedding_dimensions: int = 1536
-    embedding_batch_size: int = 64
+    # DashScope text-embedding-v3/v4 accepts at most 10 strings per request.
+    # Other OpenAI-compatible providers can override this through the env var.
+    embedding_batch_size: int = 10
     embedding_timeout: int = 60
 
     # Web search

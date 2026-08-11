@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -171,6 +171,7 @@ class BenchmarkMeta:
     default_top_k: int = 6
     language: str = "en"
     description: str = ""
+    split_includes: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
     @classmethod
     def load(cls, path: Path) -> BenchmarkMeta:
@@ -183,6 +184,15 @@ class BenchmarkMeta:
             raise DatasetError(f"{path}: default_top_k must be an integer") from exc
         if top_k < 1:
             raise DatasetError(f"{path}: default_top_k must be positive")
+        raw_includes = raw.get("split_includes", {})
+        if not isinstance(raw_includes, dict):
+            raise DatasetError(f"{path}.split_includes must be an object")
+        split_includes: dict[str, tuple[str, ...]] = {}
+        for split, include_paths in raw_includes.items():
+            split_name = _required_text(split, f"{path}.split_includes key")
+            split_includes[split_name] = tuple(
+                _text_list(include_paths, f"{path}.split_includes.{split_name}")
+            )
         return cls(
             id=_required_text(raw.get("id"), f"{path}.id"),
             title=_required_text(raw.get("title"), f"{path}.title"),
@@ -191,6 +201,7 @@ class BenchmarkMeta:
             default_top_k=top_k,
             language=str(raw.get("language", "en")).strip() or "en",
             description=str(raw.get("description", "")).strip(),
+            split_includes=split_includes,
         )
 
 
@@ -212,13 +223,15 @@ class EvalDataset:
         cases: list[EvalCase] = []
         seen_ids: set[str] = set()
         for split in requested:
-            path = root_path / f"questions.{split}.jsonl"
-            for line_no, raw in _load_jsonl(path):
-                case = EvalCase.from_dict(raw, context=f"{path}:{line_no}", split=split)
-                if case.id in seen_ids:
-                    raise DatasetError(f"duplicate case id across requested splits: {case.id}")
-                seen_ids.add(case.id)
-                cases.append(case)
+            relative_paths = (f"questions.{split}.jsonl", *meta.split_includes.get(split, ()))
+            for relative_path in relative_paths:
+                path = (root_path / relative_path).resolve()
+                for line_no, raw in _load_jsonl(path):
+                    case = EvalCase.from_dict(raw, context=f"{path}:{line_no}", split=split)
+                    if case.id in seen_ids:
+                        raise DatasetError(f"duplicate case id across requested splits: {case.id}")
+                    seen_ids.add(case.id)
+                    cases.append(case)
         return cls(root=root_path, meta=meta, cases=tuple(cases))
 
     def for_split(self, split: str) -> tuple[EvalCase, ...]:

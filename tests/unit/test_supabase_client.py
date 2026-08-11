@@ -36,7 +36,10 @@ def test_supabase_client_ignores_environment_proxy_by_default(monkeypatch):
 
     client = SupabaseClient("https://example.supabase.co", "service-key")
 
-    assert captured["httpx_kwargs"] == {"trust_env": False}
+    httpx_kwargs = captured["httpx_kwargs"]
+    assert isinstance(httpx_kwargs, dict)
+    assert httpx_kwargs["trust_env"] is False
+    assert httpx_kwargs["timeout"].read == 60
     assert captured["client_options"] == {"httpx_client": client._http_client}
     client.close()
     assert captured["closed"] is True

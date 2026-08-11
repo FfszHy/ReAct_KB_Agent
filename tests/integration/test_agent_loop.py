@@ -456,6 +456,7 @@ async def test_database_permission_overrides_refresh_before_each_tool_call():
     state = await rt.run("try twice", on_event=events.append)
 
     assert state.steps[0].status == "error"
+    assert "permission denied" in (state.steps[0].error or "")
     assert state.steps[1].status == "ok"
     assert tool.calls == [{"message": "second"}]
     assert repo.list_all.call_count == 2
@@ -646,6 +647,7 @@ async def test_run_tool_failure_observation_recorded_and_continues():
     tool_msg = state.messages[3]
     assert tool_msg.role == "tool"
     assert "boom failure" in tool_msg.content
+    assert state.steps[0].error == "boom failure"
     # Trace recorded the failure with ok=False.
     tool_call_kwargs = trace.add_tool_call.call_args.kwargs
     assert tool_call_kwargs["ok"] is False

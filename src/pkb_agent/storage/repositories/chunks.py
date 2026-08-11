@@ -86,6 +86,27 @@ class ChunksRepository:
         except Exception as e:
             raise StorageError(f"create_embeddings failed: {e}") from e
 
+    def get_embeddings_by_chunk_ids(self, chunk_ids: list[str]) -> dict[str, dict[str, Any]]:
+        """Return persisted embedding metadata keyed by chunk id."""
+        if not chunk_ids:
+            return {}
+        try:
+            rows = (
+                self._client.table(_EMBEDDINGS)
+                .select("chunk_id,model,dimensions")
+                .in_("chunk_id", chunk_ids)
+                .execute()
+                .data
+                or []
+            )
+        except Exception as e:
+            raise StorageError(f"get embeddings failed: {e}") from e
+        return {
+            str(row["chunk_id"]): row
+            for row in rows
+            if isinstance(row, dict) and isinstance(row.get("chunk_id"), str)
+        }
+
     # ------------------------------------------------------------------ search
     def vector_search(
         self,

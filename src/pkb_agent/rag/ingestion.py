@@ -114,30 +114,49 @@ class IngestionPipeline:
     ) -> dict[str, Any]:
         normalized = _normalize(text)
         content_hash = _content_hash(normalized)
+        chunks = split_text(normalized, self._chunk_size, self._chunk_overlap)
+        chunk_count = len(chunks)
 
         existing = await asyncio.to_thread(
             self._documents_repo.get_by_hash, user_id, content_hash
         )
         if existing:
-            return existing
-
-        chunks = split_text(normalized, self._chunk_size, self._chunk_overlap)
-        chunk_count = len(chunks)
-
-        document = await asyncio.to_thread(
-            self._documents_repo.create,
-            user_id=user_id,
-            title=title,
-            source_uri=source_uri,
-            source_type=source_type,
-            content_hash=content_hash,
-            char_count=len(normalized),
-            chunk_count=chunk_count,
-            meta=meta,
-        )
-        doc_id = document.get("id")
-        if not doc_id:
-            raise StorageError("document creation returned no id")
+            doc_id = existing.get("id")
+            if not doc_id:
+                raise StorageError("existing document has no id")
+            existing_chunks = await asyncio.to_thread(self._chunks_repo.list_by_document, doc_id)
+            if len(existing_chunks) == chunk_count:
+                await self._embed_missing_chunks(existing_chunks)
+                return existing
+            # A prior ingest could have stopped after creating the document or
+            # chunks. Replace only this document's dependent chunks, then
+            # retain its stable document id and content hash.
+            await asyncio.to_thread(self._chunks_repo.delete_by_document, doc_id)
+            document = await asyncio.to_thread(
+                self._documents_repo.update,
+                doc_id,
+                title=title,
+                source_uri=source_uri,
+                source_type=source_type,
+                char_count=len(normalized),
+                chunk_count=chunk_count,
+                meta=meta,
+            ) or existing
+        else:
+            document = await asyncio.to_thread(
+                self._documents_repo.create,
+                user_id=user_id,
+                title=title,
+                source_uri=source_uri,
+                source_type=source_type,
+                content_hash=content_hash,
+                char_count=len(normalized),
+                chunk_count=chunk_count,
+                meta=meta,
+            )
+            doc_id = document.get("id")
+            if not doc_id:
+                raise StorageError("document creation returned no id")
 
         rows = [
             {
@@ -163,23 +182,7 @@ class IngestionPipeline:
             ) or document
 
         try:
-            texts = [c["content"] for c in created_chunks]
-            embeddings = await self._embedder.embed(texts)
-            if len(embeddings) != len(created_chunks):
-                raise EmbeddingError(
-                    f"embedding count mismatch: got {len(embeddings)}, "
-                    f"expected {len(created_chunks)}"
-                )
-            emb_rows = [
-                {
-                    "chunk_id": created_chunks[i]["id"],
-                    "embedding": embeddings[i],
-                    "model": self._embedder.model,
-                    "dimensions": self._embedder.dimensions,
-                }
-                for i in range(len(created_chunks))
-            ]
-            await asyncio.to_thread(self._chunks_repo.create_embeddings, emb_rows)
+            await self._embed_missing_chunks(created_chunks)
         except EmbeddingError:
             await asyncio.to_thread(
                 self._documents_repo.update,
@@ -189,6 +192,45 @@ class IngestionPipeline:
             raise
 
         return document
+
+    async def _embed_missing_chunks(self, chunks: list[dict[str, Any]]) -> None:
+        """Embed only chunks without a vector for the active model and dimensions."""
+        chunk_ids = [str(chunk["id"]) for chunk in chunks if chunk.get("id")]
+        persisted = await asyncio.to_thread(
+            self._chunks_repo.get_embeddings_by_chunk_ids, chunk_ids
+        )
+        missing_chunks = [
+            chunk
+            for chunk in chunks
+            if not self._has_current_embedding(persisted.get(str(chunk.get("id") or "")))
+        ]
+        if not missing_chunks:
+            return
+        texts = [str(chunk["content"]) for chunk in missing_chunks]
+        embeddings = await self._embedder.embed(texts)
+        if len(embeddings) != len(missing_chunks):
+            raise EmbeddingError(
+                f"embedding count mismatch: got {len(embeddings)}, "
+                f"expected {len(missing_chunks)}"
+            )
+        emb_rows = [
+            {
+                "chunk_id": missing_chunks[index]["id"],
+                "embedding": embeddings[index],
+                "model": self._embedder.model,
+                "dimensions": self._embedder.dimensions,
+            }
+            for index in range(len(missing_chunks))
+        ]
+        await asyncio.to_thread(self._chunks_repo.create_embeddings, emb_rows)
+
+    def _has_current_embedding(self, row: dict[str, Any] | None) -> bool:
+        if not row or row.get("model") != self._embedder.model:
+            return False
+        try:
+            return int(row.get("dimensions")) == self._embedder.dimensions
+        except (TypeError, ValueError):
+            return False
 
     async def ingest_file(self, path: str | Path, **kwargs: Any) -> dict[str, Any]:
         p = Path(path)

@@ -1,0 +1,17 @@
+{
+  "id": "tech-multidomain-v1",
+  "title": "Multi-domain technical-documentation RAG benchmark",
+  "version": "1.0.0",
+  "language": "en",
+  "default_top_k": 6,
+  "corpus_manifest": "corpus.json",
+  "description": "A 40-document, revision-pinned technical corpus spanning FastAPI, Pydantic, Kubernetes, and SQLAlchemy. The development and frozen test splits include the original FastAPI benchmark questions plus deliberately difficult cross-domain cases.",
+  "split_includes": {
+    "dev": [
+      "../fastapi-0.115/questions.dev.jsonl"
+    ],
+    "test": [
+      "../fastapi-0.115/questions.test.jsonl"
+    ]
+  }
+}
