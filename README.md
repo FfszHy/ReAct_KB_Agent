@@ -10,12 +10,13 @@ or network access from the runtime itself.
 This is not a feature-only RAG demo. The repository contains reproducible
 benchmarks, a five-strategy retrieval ablation, raw per-question records, and a
 human-review sheet for answer grounding. The recommended final benchmark is
-[`tech-multidomain-v1`](data/evals/tech-multidomain-v1/README.md): 40 pinned
+[`tech-multidomain-v1.1`](data/evals/tech-multidomain-v1.1/README.md): 41 pinned
 documents across FastAPI, Pydantic, Kubernetes, and SQLAlchemy; an 80-question
 development split; and a separate frozen 120-question test split (88
 answerable + 32 refusal cases). It deliberately includes multi-document,
 paraphrase, terminology-ambiguity, version-trap, unanswerable, protected-tool,
-and tool-selection cases.
+and tool-selection cases. v1.1 corrects the FastAPI query-alias source label;
+v1.0 remains intact for historical comparison.
 
 The smaller FastAPI `0.115.0` slice remains checked in as a stable regression
 baseline with exact SHA-256 source hashes, 50 development questions, and a
@@ -48,27 +49,32 @@ usage for query rewrite only, excluding embedding-provider billing, so it is
 not presented as a full invoice.
 
 The evaluator also supports end-to-end answer and agent runs. It reports
-citation source alignment, refusal correctness, tool-selection correctness,
-permission-refusal handling, task success, latency, cost, and failures.
+citation source alignment, answerable-case grounded rate, conditional refusal
+correctness, terminal-outcome accuracy, tool-selection correctness,
+permission-refusal handling, task success, latency, cost, execution failures,
+tool-error run/call rates, budget-finalization rate, and non-fatal trace-write
+failures. A trace timeout is retried with a bounded backoff and is reported as
+observability degradation rather than silently converting a completed answer
+into an Agent failure.
 Semantic citation precision, key-fact coverage, and factual consistency stay
 blank until the generated audit sheet is reviewed by a human; a matching source
 document alone is deliberately not treated as proof of entailment.
 
 ```bash
 # Recommended final benchmark: validate annotations; ingestion verifies exact upstream corpus hashes.
-conda run -n pkb-agent pkb-agent eval validate data/evals/tech-multidomain-v1
-SUPABASE_TIMEOUT=90 conda run -n pkb-agent pkb-agent eval ingest-corpus data/evals/tech-multidomain-v1 --user eval-tech-multidomain-v1 --timeout 90 --attempts 4 --concurrency 2
+conda run -n pkb-agent pkb-agent eval validate data/evals/tech-multidomain-v1.1
+SUPABASE_TIMEOUT=90 conda run -n pkb-agent pkb-agent eval ingest-corpus data/evals/tech-multidomain-v1.1 --user eval-tech-multidomain-v1.1 --timeout 90 --attempts 4 --concurrency 2
 
 # Retrieval leaderboard: keep its five-strategy ablation separate from Agent scoring.
-SUPABASE_TIMEOUT=90 conda run -n pkb-agent pkb-agent eval run data/evals/tech-multidomain-v1 --split test --user eval-tech-multidomain-v1 --strategies vector,hybrid,rrf,rewrite_rrf,rewrite_hybrid --repetitions 3
+SUPABASE_TIMEOUT=90 conda run -n pkb-agent pkb-agent eval run data/evals/tech-multidomain-v1.1 --split test --user eval-tech-multidomain-v1.1 --strategies vector,hybrid,rrf,rewrite_rrf,rewrite_hybrid --repetitions 3
 
-# Agent 1/3 — primary KB-only score: rag_search + rag_read only; no web tools.
-SUPABASE_TIMEOUT=90 conda run -n pkb-agent pkb-agent eval run data/evals/tech-multidomain-v1 --split test --user eval-tech-multidomain-v1 --strategies "" --with-agent --agent-profile kb_only --repetitions 1
+# Agent 1/3 — primary KB-only score: KB catalog + rag_search + rag_read only; no web tools.
+SUPABASE_TIMEOUT=90 conda run -n pkb-agent pkb-agent eval run data/evals/tech-multidomain-v1.1 --split test --user eval-tech-multidomain-v1.1 --strategies "" --with-agent --agent-profile kb_only --repetitions 1
 
 # Agent 2/3 — protected-tool refusal: web_fetch is available but confirmation is always denied.
-SUPABASE_TIMEOUT=90 conda run -n pkb-agent pkb-agent eval run data/evals/tech-multidomain-v1 --split test --user eval-tech-multidomain-v1 --strategies "" --with-agent --agent-profile permission --repetitions 1
+SUPABASE_TIMEOUT=90 conda run -n pkb-agent pkb-agent eval run data/evals/tech-multidomain-v1.1 --split test --user eval-tech-multidomain-v1.1 --strategies "" --with-agent --agent-profile permission --repetitions 1
 
-# Agent 3/3 — separate approved-web acceptance suite; only this exact host is approved.
+# Agent 3/3 — separate approved-web acceptance suite; it keeps its independent v1 corpus scope.
 SUPABASE_TIMEOUT=90 conda run -n pkb-agent pkb-agent eval run data/evals/tech-web-approved-v1 --split test --user eval-tech-multidomain-v1 --strategies "" --with-agent --agent-profile web_approved --web-allow-host raw.githubusercontent.com --repetitions 1
 
 # Smaller regression baseline.

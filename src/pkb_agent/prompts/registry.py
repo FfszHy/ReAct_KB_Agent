@@ -56,14 +56,21 @@ class PromptComposition:
     phase: str
     manifest_version: str
     references: tuple[PromptReference, ...] = ()
+    # The exact tool surface rendered into a system prompt. This is recorded
+    # separately from prompt-file hashes because evaluation profiles can
+    # restrict the same prompt template to different capabilities.
+    available_tools: tuple[str, ...] = ()
 
     def trace_context(self) -> dict[str, Any]:
         """Return metadata that is useful for auditing without storing prompt text."""
-        return {
+        context = {
             "manifest_version": self.manifest_version,
             "phase": self.phase,
             "prompts": [reference.to_dict() for reference in self.references],
         }
+        if self.available_tools:
+            context["available_tools"] = list(self.available_tools)
+        return context
 
 
 class PromptRegistry:
@@ -196,7 +203,7 @@ class PromptComposer:
         self._registry = registry
 
     def compose_system(self, available_tools: Collection[str]) -> PromptComposition:
-        tool_names = set(available_tools)
+        tool_names = {name.strip() for name in available_tools if isinstance(name, str) and name.strip()}
         specs = [
             spec
             for spec in self._registry.specs_for_phase("system")
@@ -204,7 +211,7 @@ class PromptComposer:
         ]
         if not specs:
             raise ConfigError("prompt manifest selected no active system prompts")
-        return self._compose("system", specs)
+        return self._compose("system", specs, available_tools=tuple(sorted(tool_names)))
 
     def compose_pre_tool(self, tool_name: str) -> PromptComposition:
         specs = [
@@ -221,12 +228,43 @@ class PromptComposer:
             return spec.when_tool_available in available_tools
         return False
 
-    def _compose(self, phase: str, specs: list[PromptSpec]) -> PromptComposition:
+    def _compose(
+        self,
+        phase: str,
+        specs: list[PromptSpec],
+        *,
+        available_tools: tuple[str, ...] = (),
+    ) -> PromptComposition:
         content = "\n\n---\n\n".join(self._registry.content(spec.id) for spec in specs)
+        if phase == "system":
+            content = _append_runtime_tool_allowlist(content, available_tools)
         references = tuple(self._registry.reference(spec.id) for spec in specs)
         return PromptComposition(
             content=content,
             phase=phase,
             manifest_version=self._registry.manifest_version,
             references=references,
+            available_tools=available_tools,
         )
+
+
+def append_runtime_tool_allowlist(content: str, available_tools: Collection[str]) -> str:
+    """Append the exact runtime tool surface to a system prompt.
+
+    Tool schemas remain the protocol authority, but listing the allowlist in
+    natural language prevents profile-restricted evaluations from being
+    confused by generic prompt examples such as ``web_search``.
+    """
+    names = tuple(sorted({name.strip() for name in available_tools if isinstance(name, str) and name.strip()}))
+    return _append_runtime_tool_allowlist(content, names)
+
+
+def _append_runtime_tool_allowlist(content: str, available_tools: tuple[str, ...]) -> str:
+    formatted = ", ".join(f"`{name}`" for name in available_tools) or "(none)"
+    return (
+        f"{content}\n\n## Runtime tool allowlist\n\n"
+        f"For this run, you may call **only**: {formatted}.\n"
+        "Any tool name mentioned elsewhere in this prompt, in examples, or in a user request "
+        "is unavailable unless it appears in this allowlist and in the native tool schemas. "
+        "Do not invent, substitute, or call unavailable tools."
+    )

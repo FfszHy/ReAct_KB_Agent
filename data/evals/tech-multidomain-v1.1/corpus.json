@@ -1,0 +1,253 @@
+{
+  "id": "tech-multidomain-v1.1",
+  "title": "Multi-domain technical documentation slice (v1.1)",
+  "revision": "fastapi-0.115.0-query-alias+pydantic-v2.10.6+kubernetes-release-1.31+sqlalchemy-rel_2_0_36",
+  "documents": [
+    {
+      "key": "tutorial/path-params",
+      "title": "FastAPI: Path Parameters",
+      "source_url": "https://raw.githubusercontent.com/fastapi/fastapi/0.115.0/docs/en/docs/tutorial/path-params.md",
+      "sha256": "0ca9040f49e5da8d04edc46431879ca49902cb1ae89892f9a50395c7f3f818ed"
+    },
+    {
+      "key": "tutorial/query-params",
+      "title": "FastAPI: Query Parameters",
+      "source_url": "https://raw.githubusercontent.com/fastapi/fastapi/0.115.0/docs/en/docs/tutorial/query-params.md",
+      "sha256": "d3d1f33349ed3d5a6028a74769af0d8e46cd6ae313167276c348b291fbabe45d"
+    },
+    {
+      "key": "tutorial/query-params-str-validations",
+      "title": "FastAPI: Query Parameters and String Validations",
+      "source_url": "https://raw.githubusercontent.com/fastapi/fastapi/0.115.0/docs/en/docs/tutorial/query-params-str-validations.md",
+      "sha256": "64b083625942724f7269a4f955df186916668d6c2a518467e26686a2905bff37"
+    },
+    {
+      "key": "tutorial/body",
+      "title": "FastAPI: Request Body",
+      "source_url": "https://raw.githubusercontent.com/fastapi/fastapi/0.115.0/docs/en/docs/tutorial/body.md",
+      "sha256": "2af724e8958770d2a78f309e184dc51f74172a9361e65472c9010c93ceea95c6"
+    },
+    {
+      "key": "tutorial/dependencies",
+      "title": "FastAPI: Dependencies",
+      "source_url": "https://raw.githubusercontent.com/fastapi/fastapi/0.115.0/docs/en/docs/tutorial/dependencies/index.md",
+      "sha256": "2006b0ac81e499dd8c5326091d8d52bd386219335645d4ced91b7cd704ab12b0"
+    },
+    {
+      "key": "tutorial/handling-errors",
+      "title": "FastAPI: Handling Errors",
+      "source_url": "https://raw.githubusercontent.com/fastapi/fastapi/0.115.0/docs/en/docs/tutorial/handling-errors.md",
+      "sha256": "c57831b072e8659455a862097df32cab409a41d6f82e757d70f4c73f92069d89"
+    },
+    {
+      "key": "tutorial/cors",
+      "title": "FastAPI: CORS",
+      "source_url": "https://raw.githubusercontent.com/fastapi/fastapi/0.115.0/docs/en/docs/tutorial/cors.md",
+      "sha256": "8ef62d49193d8cce86697211badd2a71e720b3d56cdde6266c516f432c152b76"
+    },
+    {
+      "key": "tutorial/security-first-steps",
+      "title": "FastAPI: Security First Steps",
+      "source_url": "https://raw.githubusercontent.com/fastapi/fastapi/0.115.0/docs/en/docs/tutorial/security/first-steps.md",
+      "sha256": "ad0d94e12e4918e14bd81fe92d80a0d8871ef1c5f9369dfec85c1ba2a99045ad"
+    },
+    {
+      "key": "tutorial/security-oauth2-jwt",
+      "title": "FastAPI: OAuth2 with Password and JWT",
+      "source_url": "https://raw.githubusercontent.com/fastapi/fastapi/0.115.0/docs/en/docs/tutorial/security/oauth2-jwt.md",
+      "sha256": "8a578875a643b38c33d48acd40898b365b320a4937816bf5095664985632d583"
+    },
+    {
+      "key": "tutorial/response-model",
+      "title": "FastAPI: Response Model",
+      "source_url": "https://raw.githubusercontent.com/fastapi/fastapi/0.115.0/docs/en/docs/tutorial/response-model.md",
+      "sha256": "17cbf8c0d800f42d9628014ac5d94c72654bdad98fc02bef94259f8048465ab4"
+    },
+    {
+      "key": "deployment/manually",
+      "title": "FastAPI: Run a Server Manually",
+      "source_url": "https://raw.githubusercontent.com/fastapi/fastapi/0.115.0/docs/en/docs/deployment/manually.md",
+      "sha256": "df206ec7130f72ff9268dc880ea510a435b576e741fb9f4453741172db30f389"
+    },
+    {
+      "key": "pydantic-models",
+      "title": "Pydantic: Models",
+      "source_url": "https://raw.githubusercontent.com/pydantic/pydantic/v2.10.6/docs/concepts/models.md",
+      "sha256": "df0f73168540831338ae77ce1a4caeda99d221cc7efe82aa01806beb61135945"
+    },
+    {
+      "key": "pydantic-fields",
+      "title": "Pydantic: Fields",
+      "source_url": "https://raw.githubusercontent.com/pydantic/pydantic/v2.10.6/docs/concepts/fields.md",
+      "sha256": "eebd4bc75bbe4dd4554cfe6ac852cc1fb2d4d2cc34d924a5be2c6be46ecf86fe"
+    },
+    {
+      "key": "pydantic-validators",
+      "title": "Pydantic: Validators",
+      "source_url": "https://raw.githubusercontent.com/pydantic/pydantic/v2.10.6/docs/concepts/validators.md",
+      "sha256": "8dd0d1aa298237c81fbca4f50fc726c5a97176f5a8d2432ffb7bb2118a7e2274"
+    },
+    {
+      "key": "pydantic-serialization",
+      "title": "Pydantic: Serialization",
+      "source_url": "https://raw.githubusercontent.com/pydantic/pydantic/v2.10.6/docs/concepts/serialization.md",
+      "sha256": "2c787eab75dba01840b03514e428120d8f4d66ef643986f26114ad6bafa2a7ca"
+    },
+    {
+      "key": "pydantic-json-schema",
+      "title": "Pydantic: JSON Schema",
+      "source_url": "https://raw.githubusercontent.com/pydantic/pydantic/v2.10.6/docs/concepts/json_schema.md",
+      "sha256": "f5d409423251e7e88706a9bbccc34f9c3dad9f571de50b97cdd592ee41438a80"
+    },
+    {
+      "key": "pydantic-unions",
+      "title": "Pydantic: Unions",
+      "source_url": "https://raw.githubusercontent.com/pydantic/pydantic/v2.10.6/docs/concepts/unions.md",
+      "sha256": "d6d4640b6d81ed7cf26d49745a8cb8718a31da5a0bf11ad02d876510de03d1a5"
+    },
+    {
+      "key": "pydantic-aliases",
+      "title": "Pydantic: Aliases",
+      "source_url": "https://raw.githubusercontent.com/pydantic/pydantic/v2.10.6/docs/concepts/alias.md",
+      "sha256": "536d7c9f9d4be1a24224cd3aa9def13aa152569b7be3c8a233030e92ec530b81"
+    },
+    {
+      "key": "pydantic-config",
+      "title": "Pydantic: Configuration",
+      "source_url": "https://raw.githubusercontent.com/pydantic/pydantic/v2.10.6/docs/concepts/config.md",
+      "sha256": "b6cbc3508853b670dea726409fc07f132e9b5edb025e43a747f9b2c4c59c0ea1"
+    },
+    {
+      "key": "pydantic-dataclasses",
+      "title": "Pydantic: Dataclasses",
+      "source_url": "https://raw.githubusercontent.com/pydantic/pydantic/v2.10.6/docs/concepts/dataclasses.md",
+      "sha256": "cc2308109e7ac1c74db02a7d3310ad7ed3d3990371f1ec918ebcea778250c631"
+    },
+    {
+      "key": "pydantic-performance",
+      "title": "Pydantic: Performance Tips",
+      "source_url": "https://raw.githubusercontent.com/pydantic/pydantic/v2.10.6/docs/concepts/performance.md",
+      "sha256": "d41b234d48c6ede7e2e3c859494b8077dbe857f863a380dd292c0fa94755543b"
+    },
+    {
+      "key": "kubernetes-overview",
+      "title": "Kubernetes: Overview and General Configuration",
+      "source_url": "https://raw.githubusercontent.com/kubernetes/website/release-1.31/content/en/docs/concepts/configuration/overview.md",
+      "sha256": "157225dd5dad066e1fca6f63e13db3dad28b115049e3b1c5e7957e7f88f9a2c1"
+    },
+    {
+      "key": "kubernetes-configmap",
+      "title": "Kubernetes: ConfigMaps",
+      "source_url": "https://raw.githubusercontent.com/kubernetes/website/release-1.31/content/en/docs/concepts/configuration/configmap.md",
+      "sha256": "8e04b9e5c6fea6ac1507fabf2f23040f4d93dd027c0ec8c6a53ce554e2af34b7"
+    },
+    {
+      "key": "kubernetes-secret",
+      "title": "Kubernetes: Secrets",
+      "source_url": "https://raw.githubusercontent.com/kubernetes/website/release-1.31/content/en/docs/concepts/configuration/secret.md",
+      "sha256": "67830b1e08404ec3fe5f6816ae983e2125ea23813fe771eea5090f8c38c8519a"
+    },
+    {
+      "key": "kubernetes-resources",
+      "title": "Kubernetes: Resource Management for Pods and Containers",
+      "source_url": "https://raw.githubusercontent.com/kubernetes/website/release-1.31/content/en/docs/concepts/configuration/manage-resources-containers.md",
+      "sha256": "1947add3b044b8916576b73df1ea395d2686ede950d2f7601143e7b6613bb3f6"
+    },
+    {
+      "key": "kubernetes-deployment",
+      "title": "Kubernetes: Deployments",
+      "source_url": "https://raw.githubusercontent.com/kubernetes/website/release-1.31/content/en/docs/concepts/workloads/controllers/deployment.md",
+      "sha256": "906251a254d99e051a574e8d6cc2108eeb54c2b5727a22569246ce5af260d1b2"
+    },
+    {
+      "key": "kubernetes-pod-lifecycle",
+      "title": "Kubernetes: Pod Lifecycle",
+      "source_url": "https://raw.githubusercontent.com/kubernetes/website/release-1.31/content/en/docs/concepts/workloads/pods/pod-lifecycle.md",
+      "sha256": "2e355209847e81a9947701f1b27a58ee6ce853f930047ce59b708d567c94b8b8"
+    },
+    {
+      "key": "kubernetes-service",
+      "title": "Kubernetes: Service",
+      "source_url": "https://raw.githubusercontent.com/kubernetes/website/release-1.31/content/en/docs/concepts/services-networking/service.md",
+      "sha256": "6b37c791c18426c5e9395dbba462fa5910b1ab346a1312d1864a34d2ef3f7ebf"
+    },
+    {
+      "key": "kubernetes-service-account",
+      "title": "Kubernetes: Service Accounts",
+      "source_url": "https://raw.githubusercontent.com/kubernetes/website/release-1.31/content/en/docs/concepts/security/service-accounts.md",
+      "sha256": "f5ad76f55d0a0d0ffa60f760e590450f4ab4b62cd82123ac1ae477111df5397f"
+    },
+    {
+      "key": "kubernetes-names",
+      "title": "Kubernetes: Object Names and IDs",
+      "source_url": "https://raw.githubusercontent.com/kubernetes/website/release-1.31/content/en/docs/concepts/overview/working-with-objects/names.md",
+      "sha256": "db313218e3ab8bc57a2333abd56df3cf77fdb67449d867b533e032a867369a2c"
+    },
+    {
+      "key": "kubernetes-init-containers",
+      "title": "Kubernetes: Init Containers",
+      "source_url": "https://raw.githubusercontent.com/kubernetes/website/release-1.31/content/en/docs/concepts/workloads/pods/init-containers.md",
+      "sha256": "770728807f4f2d66ef63a5cbd2e8f94df60dd1286136190c5317c2c00dfda417"
+    },
+    {
+      "key": "sqlalchemy-session-basics",
+      "title": "SQLAlchemy: Session Basics",
+      "source_url": "https://raw.githubusercontent.com/sqlalchemy/sqlalchemy/rel_2_0_36/doc/build/orm/session_basics.rst",
+      "sha256": "fdaeee879d1c6eac1bd85b351cc19d35a7e8060f2f8eb15d98362fa1a74daed9"
+    },
+    {
+      "key": "sqlalchemy-quickstart",
+      "title": "SQLAlchemy: ORM Quick Start",
+      "source_url": "https://raw.githubusercontent.com/sqlalchemy/sqlalchemy/rel_2_0_36/doc/build/orm/quickstart.rst",
+      "sha256": "1569972a928326c632c0e3e8e47c391943b1c9e926964d414a8eb2049f77930e"
+    },
+    {
+      "key": "sqlalchemy-select",
+      "title": "SQLAlchemy: ORM SELECT Statements",
+      "source_url": "https://raw.githubusercontent.com/sqlalchemy/sqlalchemy/rel_2_0_36/doc/build/orm/queryguide/select.rst",
+      "sha256": "f711e88d1e40ef24f61dae925a4db528108f53a65d692417f2ce9214c9770224"
+    },
+    {
+      "key": "sqlalchemy-connections",
+      "title": "SQLAlchemy: Engines and Connections",
+      "source_url": "https://raw.githubusercontent.com/sqlalchemy/sqlalchemy/rel_2_0_36/doc/build/core/connections.rst",
+      "sha256": "819d9cbcdb34aea50cd33d76c4e19f8fb55692483cc9af006ad3d021ed0a8cb9"
+    },
+    {
+      "key": "sqlalchemy-cascades",
+      "title": "SQLAlchemy: Cascades",
+      "source_url": "https://raw.githubusercontent.com/sqlalchemy/sqlalchemy/rel_2_0_36/doc/build/orm/cascades.rst",
+      "sha256": "dcc428af38dcff0d4ebdad8cc39c1a1b51c243a4877b6278a209221cf91ea26d"
+    },
+    {
+      "key": "sqlalchemy-declarative-tables",
+      "title": "SQLAlchemy: Declarative Tables",
+      "source_url": "https://raw.githubusercontent.com/sqlalchemy/sqlalchemy/rel_2_0_36/doc/build/orm/declarative_tables.rst",
+      "sha256": "df7e5ab2c6bb4a787c0ccfeb1f516665e7fcee399dac7b9c572fe1d800cb69e9"
+    },
+    {
+      "key": "sqlalchemy-mapping-styles",
+      "title": "SQLAlchemy: ORM Mapping Styles",
+      "source_url": "https://raw.githubusercontent.com/sqlalchemy/sqlalchemy/rel_2_0_36/doc/build/orm/mapping_styles.rst",
+      "sha256": "6a0d5a87e37ef1c72dad4691e1d3cf0df0cb49ecf7154ba1b66a9d6dad465369"
+    },
+    {
+      "key": "sqlalchemy-session-transaction",
+      "title": "SQLAlchemy: Transactions and Connection Management",
+      "source_url": "https://raw.githubusercontent.com/sqlalchemy/sqlalchemy/rel_2_0_36/doc/build/orm/session_transaction.rst",
+      "sha256": "b11a8f1eb31b6bf052581ecc6ad14e5fe4a1aa6e2bbfa24cdceb8193d7d0542f"
+    },
+    {
+      "key": "sqlalchemy-basic-relationships",
+      "title": "SQLAlchemy: Basic Relationship Patterns",
+      "source_url": "https://raw.githubusercontent.com/sqlalchemy/sqlalchemy/rel_2_0_36/doc/build/orm/basic_relationships.rst",
+      "sha256": "3a8cd95d84d79e90fdc4175ef11c939f032072fda86116b1f2b5c8284f3434d2"
+    },
+    {
+      "key": "sqlalchemy-relationship-persistence",
+      "title": "SQLAlchemy: Special Relationship Persistence Patterns",
+      "source_url": "https://raw.githubusercontent.com/sqlalchemy/sqlalchemy/rel_2_0_36/doc/build/orm/relationship_persistence.rst",
+      "sha256": "4e72023254e7831b82dec740c643952a6fb1e63ec612bfbce805867ecd5073e8"
+    }
+  ]
+}

@@ -161,8 +161,8 @@ def _markdown(summary: Mapping[str, Any]) -> str:
                 "",
                 "## Grounded-answer and agent checks",
                 "",
-                "| Strategy | Citation alignment precision | Evidence document coverage | Refusal correctness | Human citation precision | Key-fact coverage | Fact consistency | Tool selection | Permission refusal | Task success |",
-                "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+                "| Strategy | Citation alignment precision | Evidence document coverage | Grounded answer rate | Refusal correctness | Terminal outcome accuracy | Human citation precision | Key-fact coverage | Fact consistency | Tool selection | Permission refusal | Task success |",
+                "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
             ]
         )
         for name, item in agent_rows:
@@ -171,11 +171,13 @@ def _markdown(summary: Mapping[str, Any]) -> str:
             human = _mapping(answer.get("human_audit"))
             agent = _mapping(item.get("agent"))
             lines.append(
-                "| {name} | {align} | {coverage} | {refusal} | {citation} | {facts} | {consistency} | {tools} | {permission} | {success} |".format(
+                "| {name} | {align} | {coverage} | {grounded} | {refusal} | {terminal} | {citation} | {facts} | {consistency} | {tools} | {permission} | {success} |".format(
                     name=name,
                     align=_percent(automatic.get("citation_alignment_precision")),
                     coverage=_percent(automatic.get("evidence_document_coverage")),
+                    grounded=_percent(automatic.get("grounded_answer_rate")),
                     refusal=_percent(automatic.get("refusal_correctness")),
+                    terminal=_percent(automatic.get("terminal_outcome_accuracy")),
                     citation=_percent(human.get("citation_precision")),
                     facts=_percent(human.get("key_fact_coverage")),
                     consistency=_percent(human.get("fact_consistency")),
@@ -189,18 +191,22 @@ def _markdown(summary: Mapping[str, Any]) -> str:
                 "",
                 "## Agent execution states",
                 "",
-                "| Strategy | Execution failure rate | Refusal terminal rate |",
-                "| --- | ---: | ---: |",
+                "| Strategy | Execution failure rate | Tool-error runs | Tool-call failure | Budget finalization | Trace-write failures | Refusal terminal rate |",
+                "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
             ]
         )
         for name, item in agent_rows:
             engineering = _mapping(item.get("engineering"))
             lines.append(
-                "| {name} | {failure} | {refusal} |".format(
+                "| {name} | {failure} | {tool_runs} | {tool_calls} | {budget} | {trace} | {refusal} |".format(
                     name=name,
                     failure=_percent(
                         engineering.get("execution_failure_rate", engineering.get("failure_rate"))
                     ),
+                    tool_runs=_percent(engineering.get("tool_error_run_rate")),
+                    tool_calls=_percent(engineering.get("tool_call_failure_rate")),
+                    budget=_percent(engineering.get("budget_finalization_rate")),
+                    trace=_trace_failures(engineering),
                     refusal=_percent(engineering.get("refusal_terminal_rate")),
                 )
             )
@@ -212,7 +218,8 @@ def _markdown(summary: Mapping[str, Any]) -> str:
             "- Retrieval metrics are document-level: a wider chunk candidate pool is deduplicated by source before scoring K documents.",
             "- Citation alignment is an automatic source-match proxy, not a semantic entailment claim.",
             "- Human-audit metrics remain blank until the generated audit JSONL is reviewed.",
-            "- A refusal terminal is a normal insufficient-evidence completion, not an engineering failure; use refusal correctness and task success to judge whether it was appropriate.",
+            "- Grounded-answer rate is measured only on answerable cases; refusal correctness only on unanswerable cases; terminal outcome accuracy combines both. A refusal terminal is a normal insufficient-evidence completion, not an engineering failure.",
+            "- Tool-error runs count Agent cases with at least one failed tool observation; tool-call failure counts failed observations over all recorded Agent tool calls. This includes expected permission denials in the permission profile, whose correctness is reported separately by permission-refusal handling. Trace-write failures are non-fatal after bounded retries and remain visible separately.",
             "- Bootstrap intervals quantify uncertainty in this fixed benchmark, not generalization to arbitrary corpora.",
             "- Known LLM cost covers only usage emitted by the configured provider; it is not an invoice.",
             "",
@@ -340,6 +347,14 @@ def _interval(value: Any) -> str:
 def _percent(value: Any) -> str:
     parsed = _as_float(value)
     return f"{parsed * 100:.1f}%" if parsed is not None else "—"
+
+
+def _trace_failures(engineering: Mapping[str, Any]) -> str:
+    count = _as_float(engineering.get("trace_write_failure_count"))
+    rate = _percent(engineering.get("trace_write_failure_run_rate"))
+    if count is None:
+        return "—"
+    return f"{count:.0f} ({rate})"
 
 
 def _ms(value: Any) -> str:

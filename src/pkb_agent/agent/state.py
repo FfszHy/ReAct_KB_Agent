@@ -84,6 +84,13 @@ class AgentRunState:
     verification: dict = field(default_factory=dict)
     evidence: dict[str, Evidence] = field(default_factory=dict)
     verification_attempts: int = 0
+    # ``budget_finalized`` means the runtime stopped further tool execution
+    # deliberately and requested a final no-tool JSON answer. It is a normal
+    # terminal path, not a max-step execution error.
+    budget_finalized: bool = False
+    # Trace persistence is intentionally non-fatal. Keep its degradation
+    # visible in artifacts without letting observability decide run success.
+    trace_write_failure_count: int = 0
     error: str | None = None
     created_at: datetime = field(default_factory=_now)
     ended_at: datetime | None = None
@@ -216,6 +223,8 @@ class AgentRunState:
             "tool_call_count": self.tool_call_count,
             "successful_tool_call_count": self.successful_tool_call_count,
             "tool_success_rate": tool_success_rate,
+            "budget_finalized": self.budget_finalized,
+            "trace_write_failure_count": self.trace_write_failure_count,
             "execution_succeeded": execution_succeeded,
             "run_succeeded": run_succeeded,
             "run_success_rate": 100.0 if run_succeeded else 0.0,
@@ -233,6 +242,8 @@ class AgentRunState:
             "final_answer": self.final_answer,
             "answer": self.answer_payload,
             "verification": self.verification,
+            "budget_finalized": self.budget_finalized,
+            "trace_write_failure_count": self.trace_write_failure_count,
             "usage": dict(self.usage),
             "metrics": self.metrics(),
             "retrieved_evidence": [

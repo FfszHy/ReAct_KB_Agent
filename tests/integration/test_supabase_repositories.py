@@ -321,15 +321,16 @@ def test_chunks_get_chunk_with_doc_flattens_documents_key():
 # --------------------------------------------------------------------------- #
 
 
-def test_traces_create_run_inserts_row_and_returns_first():
+def test_traces_create_run_upserts_row_and_returns_first():
     client = _FakeSupabaseClient().queue([{"id": "r1", "status": "running"}])
     repo = TracesRepository(client)
 
     row = repo.create_run(run_id="r1", user_id="alice", question="why?")
 
     assert row == {"id": "r1", "status": "running"}
-    call = client.find_call("insert", "agent_runs")
-    assert call["row"] == {
+    call = client.find_call("upsert", "agent_runs")
+    assert call["on_conflict"] == "id"
+    assert call["payload"] == {
         "id": "r1",
         "user_id": "alice",
         "question": "why?",
@@ -391,10 +392,12 @@ def test_traces_store_prompt_and_rewrite_provenance_when_provided():
         prompt_context={"status": "applied"},
     )
 
-    run_row = client.find_call("insert", "agent_runs")["row"]
-    step_row = client.find_call("insert", "agent_steps")["row"]
-    call_row = client.find_call("insert", "tool_calls")["row"]
+    run_row = client.find_call("upsert", "agent_runs")["payload"]
+    step_row = client.find_call("upsert", "agent_steps")["payload"]
+    call_row = client.find_call("upsert", "tool_calls")["payload"]
     assert run_row["prompt_context"]["prompts"][0]["id"] == "system_react"
+    assert step_row["id"]
+    assert call_row["id"]
     assert step_row["original_tool_args"]["query"].startswith("What did")
     assert call_row["original_arguments"]["query"].startswith("What did")
 

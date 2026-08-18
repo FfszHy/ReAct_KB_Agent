@@ -9,6 +9,9 @@ agent:
   # Invalid final JSON/citations get this many repair attempts before a
   # deterministic insufficient-evidence refusal is returned.
   answer_verification_max_retries: 2
+  # Stop retrieving slightly before max_steps and make a no-tool final JSON
+  # attempt. This avoids turning repeated searches/reads into max-step errors.
+  finalization_reserve_steps: 3
   # Passed as max_tokens with DeepSeek JSON Output so final JSON is not
   # truncated mid-object. Override with AGENT_JSON_OUTPUT_MAX_TOKENS if needed.
   json_output_max_tokens: 4096
@@ -70,6 +73,11 @@ permissions:
 trace:
   enabled: true
   redact_secrets: true
+  # Trace writes are retried only for transient storage/transport failures.
+  # After these attempts, the answer still completes and the run records a
+  # trace-write failure instead of becoming an Agent execution failure.
+  retry_attempts: 3
+  retry_backoff_seconds: 0.25
 
 # FastAPI workbench. The browser subscribes to a run with SSE and is the only
 # place an `ask`-permission tool can be approved.

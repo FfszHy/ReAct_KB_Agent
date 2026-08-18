@@ -257,7 +257,9 @@ def _pairwise_retrieval_comparison(
 def _answer_metrics(cases: Mapping[str, EvalCase], rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
     alignment_scores: list[float] = []
     document_coverages: list[float] = []
+    grounded_answer: list[float] = []
     refusal_correct: list[float] = []
+    terminal_outcome_correct: list[float] = []
     cited_total = 0
     cited_aligned = 0
     human_citation: list[bool] = []
@@ -280,8 +282,13 @@ def _answer_metrics(cases: Mapping[str, EvalCase], rows: Iterable[Mapping[str, A
         answer_status = str(row.get("answer_status") or "")
         verification_status = str(row.get("verification_status") or "")
         refusal = answer_status == "insufficient_evidence" or verification_status == "refused"
-        correct_refusal_behavior = refusal if not case.answerable else answer_status == "grounded"
-        refusal_correct.append(float(correct_refusal_behavior))
+        grounded = answer_status == "grounded"
+        if case.answerable:
+            grounded_answer.append(float(grounded))
+            terminal_outcome_correct.append(float(grounded))
+        else:
+            refusal_correct.append(float(refusal))
+            terminal_outcome_correct.append(float(refusal))
         audit = row.get("audit")
         if isinstance(audit, Mapping):
             human_citation.extend(_bool_judgments(audit.get("citation_support"), "supported"))
@@ -299,7 +306,11 @@ def _answer_metrics(cases: Mapping[str, EvalCase], rows: Iterable[Mapping[str, A
             "citation_alignment_precision": _ratio(cited_aligned, cited_total),
             "citation_alignment_precision_macro": _mean(alignment_scores),
             "evidence_document_coverage": _mean(document_coverages),
+            "grounded_answer_rate": _mean(grounded_answer),
             "refusal_correctness": _mean(refusal_correct),
+            "terminal_outcome_accuracy": _mean(terminal_outcome_correct),
+            "answerable_case_count": len(grounded_answer),
+            "unanswerable_case_count": len(refusal_correct),
             "cited_documents": cited_total,
         },
         "human_audit": {
@@ -382,11 +393,24 @@ def _engineering_metrics(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
         _is_refusal_terminal(row) and not _is_execution_failure(row)
         for row in agent_rows
     )
+    tool_error_runs = sum(bool(_text_items(row.get("tool_errors"))) for row in agent_rows)
+    tool_error_count = sum(len(_text_items(row.get("tool_errors"))) for row in agent_rows)
+    tool_call_count = sum(len(_text_items(row.get("tools"))) for row in agent_rows)
+    budget_finalized_runs = sum(bool(row.get("budget_finalized")) for row in agent_rows)
+    trace_write_failure_runs = sum(
+        _non_negative_count(row.get("trace_write_failure_count")) > 0 for row in agent_rows
+    )
+    trace_write_failure_count = sum(
+        _non_negative_count(row.get("trace_write_failure_count")) for row in agent_rows
+    )
     return {
         "definition": (
             "Execution failure means a recorded runtime error or explicit execution failure. "
             "A normal insufficient-evidence refusal is reported separately and is not an "
-            "engineering failure; its correctness is scored by the answer and agent metrics."
+            "engineering failure; its correctness is scored by the answer and agent metrics. "
+            "Tool-error rates use Agent tool observations (including expected permission "
+            "denials in the permission profile); trace-write failures are exhausted "
+            "non-fatal trace retries."
         ),
         "record_count": len(rows),
         "p50_latency_ms": percentile(durations, 50),
@@ -397,6 +421,21 @@ def _engineering_metrics(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
         "cost_record_count": len(costs),
         "execution_failure_rate": _ratio(execution_failures, len(rows)),
         "refusal_terminal_rate": _ratio(refusal_terminals, len(agent_rows)) if agent_rows else None,
+        "agent_record_count": len(agent_rows),
+        "tool_error_run_rate": _ratio(tool_error_runs, len(agent_rows)) if agent_rows else None,
+        "tool_call_failure_rate": _ratio(tool_error_count, tool_call_count),
+        "tool_error_run_count": tool_error_runs,
+        "tool_error_count": tool_error_count,
+        "tool_call_count": tool_call_count,
+        "budget_finalization_rate": (
+            _ratio(budget_finalized_runs, len(agent_rows)) if agent_rows else None
+        ),
+        "budget_finalization_count": budget_finalized_runs,
+        "trace_write_failure_run_rate": (
+            _ratio(trace_write_failure_runs, len(agent_rows)) if agent_rows else None
+        ),
+        "trace_write_failure_run_count": trace_write_failure_runs,
+        "trace_write_failure_count": trace_write_failure_count,
         # Kept as a compatibility alias for existing consumers.  Its meaning
         # is now aligned with the report label instead of conflating a safe
         # refusal with an execution failure.
@@ -464,6 +503,22 @@ def _unique_texts(value: Any) -> list[str]:
             seen.add(text)
             result.append(text)
     return result
+
+
+def _text_items(value: Any) -> list[str]:
+    """Keep every non-empty text item for event-count engineering metrics."""
+    if not isinstance(value, (list, tuple)):
+        return []
+    return [item.strip() for item in value if isinstance(item, str) and item.strip()]
+
+
+def _non_negative_count(value: Any) -> int:
+    if isinstance(value, bool):
+        return 0
+    try:
+        return max(int(value), 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _bool_judgments(value: Any, key: str) -> list[bool]:

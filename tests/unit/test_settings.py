@@ -27,7 +27,9 @@ def test_yaml_web_evidence_policy_maps_to_settings(monkeypatch, tmp_path):
     config_path = tmp_path / "config.yaml"
     config_path.write_text(
         "web:\n  evidence_ttl_hours: 48\n  trusted_domains: [docs.example, api.example]\n"
-        "agent:\n  answer_verification_max_retries: 4\n  json_output_max_tokens: 8192\n",
+        "agent:\n  answer_verification_max_retries: 4\n  finalization_reserve_steps: 5\n"
+        "  json_output_max_tokens: 8192\n"
+        "trace:\n  retry_attempts: 4\n  retry_backoff_seconds: 0.5\n",
         "utf-8",
     )
     monkeypatch.setenv("PKB_CONFIG_PATH", str(config_path))
@@ -37,7 +39,10 @@ def test_yaml_web_evidence_policy_maps_to_settings(monkeypatch, tmp_path):
     assert settings.web_evidence_ttl_hours == 48
     assert settings.web_trusted_domains == ["docs.example", "api.example"]
     assert settings.agent_answer_verification_max_retries == 4
+    assert settings.agent_finalization_reserve_steps == 5
     assert settings.agent_json_output_max_tokens == 8192
+    assert settings.trace_retry_attempts == 4
+    assert settings.trace_retry_backoff_seconds == 0.5
 
 
 def test_yaml_supabase_proxy_policy_maps_to_settings(monkeypatch, tmp_path):

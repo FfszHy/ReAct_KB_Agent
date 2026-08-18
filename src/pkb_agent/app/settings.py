@@ -135,6 +135,10 @@ class Settings(BaseSettings):
     agent_tool_result_max_chars: int = 6000
     agent_temperature: float = 0.2
     agent_answer_verification_max_retries: int = 2
+    # Reserve a few retrieval actions for a no-tool final-answer turn. This
+    # prevents a repeated read/search loop from spending the complete budget
+    # and being converted into a hard execution failure.
+    agent_finalization_reserve_steps: int = Field(default=3, ge=0, le=50)
     # DeepSeek JSON Output needs an explicit enough completion ceiling so a
     # valid answer object is not cut off mid-generation.
     agent_json_output_max_tokens: int = Field(default=4096, ge=1)
@@ -170,6 +174,11 @@ class Settings(BaseSettings):
     # Trace
     trace_enabled: bool = True
     trace_redact_secrets: bool = True
+    # Trace persistence is observability, not part of the answer path. Retry
+    # transient database transport failures a bounded number of times, then
+    # let the run complete while recording the degraded trace in its metrics.
+    trace_retry_attempts: int = Field(default=3, ge=1, le=10)
+    trace_retry_backoff_seconds: float = Field(default=0.25, ge=0, le=10)
 
     # Visual workbench API
     api_allowed_origins: list[str] = Field(

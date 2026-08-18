@@ -97,6 +97,30 @@ def test_checked_in_multidomain_dataset_has_pinned_40_document_frozen_test():
     }.issubset(keys)
 
 
+def test_checked_in_multidomain_v1_1_corrects_the_fastapi_alias_source():
+    dataset = EvalDataset.load("data/evals/tech-multidomain-v1.1")
+    manifest = CorpusManifest.load(dataset.root / dataset.meta.corpus_manifest)
+    test_cases = {case.id: case for case in dataset.for_split("test")}
+    query_alias = test_cases["test-query-02"]
+
+    assert dataset.meta.version == "1.1.0"
+    assert len(manifest.documents) == 41
+    assert len(dataset.for_split("dev")) == 80
+    assert len(test_cases) == 120
+    assert manifest.source_uri("tutorial/query-params-str-validations") == (
+        "eval://tech-multidomain-v1.1/tutorial/query-params-str-validations"
+    )
+    assert next(
+        document.sha256
+        for document in manifest.documents
+        if document.key == "tutorial/query-params-str-validations"
+    ) == "64b083625942724f7269a4f955df186916668d6c2a518467e26686a2905bff37"
+    assert query_alias.relevance_by_document == {"tutorial/query-params-str-validations": 2}
+    assert query_alias.key_facts[0].source_documents == (
+        "tutorial/query-params-str-validations",
+    )
+
+
 def test_checked_in_approved_web_dataset_reuses_pinned_documents_with_external_locators():
     dataset = EvalDataset.load("data/evals/tech-web-approved-v1")
     manifest = CorpusManifest.load(dataset.root / dataset.meta.corpus_manifest)
@@ -306,10 +330,40 @@ def test_answer_metrics_keep_automatic_alignment_separate_from_human_audit():
 
     assert answer["automatic"]["citation_alignment_precision"] == 0.5
     assert answer["automatic"]["evidence_document_coverage"] == 0.5
+    assert answer["automatic"]["grounded_answer_rate"] == 1.0
     assert answer["automatic"]["refusal_correctness"] == 1.0
+    assert answer["automatic"]["terminal_outcome_accuracy"] == 1.0
+    assert answer["automatic"]["answerable_case_count"] == 1
+    assert answer["automatic"]["unanswerable_case_count"] == 1
     assert answer["human_audit"]["citation_precision"] == 0.5
     assert answer["human_audit"]["key_fact_coverage"] == 1.0
     assert answer["human_audit"]["fact_consistency"] == 1.0
+
+
+def test_answer_metrics_keep_refusal_correctness_conditional_on_unanswerable_cases():
+    dataset = _dataset()
+    records = [
+        {
+            "kind": "agent",
+            "strategy": "agent",
+            "case_id": "a",
+            "answer_status": "grounded",
+            "verification_status": "verified",
+        },
+        {
+            "kind": "agent",
+            "strategy": "agent",
+            "case_id": "negative",
+            "answer_status": "grounded",
+            "verification_status": "verified",
+        },
+    ]
+
+    automatic = summarize_records(dataset, records)["strategies"]["agent"]["answer"]["automatic"]
+
+    assert automatic["grounded_answer_rate"] == 1.0
+    assert automatic["refusal_correctness"] == 0.0
+    assert automatic["terminal_outcome_accuracy"] == 0.5
 
 
 def test_agent_metrics_score_denied_confirmation_after_selecting_protected_tool():
@@ -382,6 +436,41 @@ def test_engineering_metrics_keep_refusal_terminals_out_of_execution_failures():
     assert engineering["execution_failure_rate"] == 0.5
     assert engineering["refusal_terminal_rate"] == 0.5
     assert engineering["failure_rate"] == 0.5
+
+
+def test_engineering_metrics_expose_tool_and_nonfatal_trace_failures():
+    records = [
+        {
+            "kind": "agent",
+            "strategy": "agent",
+            "case_id": "a",
+            "tools": ["rag_search", "rag_read"],
+            "tool_errors": ["rag_read failed: temporary timeout"],
+            "budget_finalized": True,
+            "trace_write_failure_count": 2,
+            "duration_ms": 10,
+            "execution_success": True,
+        },
+        {
+            "kind": "agent",
+            "strategy": "agent",
+            "case_id": "negative",
+            "tools": ["rag_search"],
+            "tool_errors": [],
+            "budget_finalized": False,
+            "trace_write_failure_count": 0,
+            "duration_ms": 20,
+            "execution_success": True,
+        },
+    ]
+
+    engineering = summarize_records(_dataset(), records)["strategies"]["agent"]["engineering"]
+
+    assert engineering["tool_error_run_rate"] == 0.5
+    assert engineering["tool_call_failure_rate"] == pytest.approx(1 / 3)
+    assert engineering["budget_finalization_rate"] == 0.5
+    assert engineering["trace_write_failure_count"] == 2
+    assert engineering["trace_write_failure_run_rate"] == 0.5
 
 
 async def test_agent_runner_marks_normal_refusal_as_an_execution_success():
@@ -467,6 +556,7 @@ def test_report_and_audit_artifacts_are_portable(tmp_path: Path):
     assert "Retrieval ablation" in paths["chart"].read_text("utf-8")
     assert "Execution failure rate" in paths["markdown"].read_text("utf-8")
     assert "Refusal terminal rate" in paths["markdown"].read_text("utf-8")
+    assert "Tool-error runs" in paths["markdown"].read_text("utf-8")
     assert json.loads(paths["summary"].read_text("utf-8"))["benchmark"]["id"] == "unit"
 
 

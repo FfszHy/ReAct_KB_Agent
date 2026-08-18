@@ -256,6 +256,22 @@ def test_runtime_can_restrict_the_tool_surface_for_an_evaluation_profile():
         rt.restrict_tools(["missing"])
 
 
+async def test_runtime_prompt_explicitly_lists_only_the_restricted_tools():
+    rt = _make_runtime(
+        llm_side_effect=[_answer_completion("done")],
+        tools=[_EchoTool(), _FailTool()],
+    )
+    rt.restrict_tools(["echo"])
+
+    state = await rt.run("what can I use?")
+
+    system_prompt = state.messages[0].content or ""
+    assert "## Runtime tool allowlist" in system_prompt
+    assert "`echo`" in system_prompt
+    assert "`fail`" not in system_prompt
+    assert state.prompt_context["available_tools"] == ["echo"]
+
+
 # --------------------------------------------------------------------------- #
 # Component: ToolResult
 # --------------------------------------------------------------------------- #
@@ -611,15 +627,15 @@ async def test_run_refuses_when_final_answer_cannot_be_verified():
 
 
 # --------------------------------------------------------------------------- #
-# AgentRuntime loop: max steps exhausted
+# AgentRuntime loop: tool budget finalization
 # --------------------------------------------------------------------------- #
 
 
-async def test_run_max_steps_reached():
+async def test_run_tool_budget_finalizes_without_a_max_step_error():
     tc = ToolCall(id="tc1", name="echo", arguments={"message": "loop"})
     trace = _make_trace()
     rt = _make_runtime(
-        llm_side_effect=[_tool_completion("again", tc), _tool_completion("again", tc)],
+        llm_side_effect=[_tool_completion("again", tc), _answer_completion("done")],
         tools=[_EchoTool()],
         max_steps=2,
         trace=trace,
@@ -627,11 +643,56 @@ async def test_run_max_steps_reached():
 
     state = await rt.run("keep looping")
 
-    assert state.status is AgentStatus.MAX_STEPS
-    assert state.step_count == 2
-    assert "max_steps=2" in (state.error or "")
+    assert state.status is AgentStatus.FINISHED
+    assert state.step_count == 1
+    assert state.budget_finalized is True
+    assert state.error is None
     finish_kwargs = trace.finish_run.call_args.kwargs
-    assert finish_kwargs["status"] == "max_steps"
+    assert finish_kwargs["status"] == "finished"
+    assert rt.llm.chat.call_args_list[-1].kwargs["tools"] is None
+
+
+async def test_tool_budget_closes_skipped_calls_in_a_multi_tool_completion():
+    first = ToolCall(id="tc1", name="echo", arguments={"message": "first"})
+    skipped = ToolCall(id="tc2", name="echo", arguments={"message": "second"})
+    completion = ChatCompletion(
+        id="batch",
+        model="deepseek-v4-flash",
+        choices=[
+            ChatChoice(
+                index=0,
+                message=Message.assistant(content="batch", tool_calls=[first, skipped]),
+                finish_reason="tool_calls",
+            )
+        ],
+        usage={},
+    )
+    rt = _make_runtime(
+        llm_side_effect=[completion, _answer_completion("done")],
+        tools=[_EchoTool()],
+        max_steps=2,
+    )
+
+    state = await rt.run("keep looping")
+
+    assert state.status is AgentStatus.FINISHED
+    assert state.step_count == 1
+    skipped_message = next(message for message in state.messages if message.tool_call_id == "tc2")
+    assert "tool budget exhausted" in (skipped_message.content or "")
+    assert rt.llm.chat.call_args_list[-1].kwargs["tools"] is None
+
+
+async def test_trace_write_failure_does_not_turn_a_completed_answer_into_an_execution_error():
+    trace = _make_trace()
+    trace.finish_run = AsyncMock(return_value=False)
+    rt = _make_runtime(llm_side_effect=[_answer_completion("done")], trace=trace)
+
+    state = await rt.run("answer despite trace failure")
+
+    assert state.status is AgentStatus.FINISHED
+    assert state.error is None
+    assert state.trace_write_failure_count == 1
+    assert state.metrics()["execution_succeeded"] is True
 
 
 # --------------------------------------------------------------------------- #

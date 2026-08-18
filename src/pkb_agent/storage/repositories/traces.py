@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
+from uuid import NAMESPACE_URL, uuid5
 
 from pkb_agent.agent.errors import StorageError
 from pkb_agent.storage.supabase_client import SupabaseClient
@@ -19,6 +20,17 @@ def _iso(dt: datetime | str | None) -> str | None:
     if isinstance(dt, str):
         return dt
     return dt.isoformat()
+
+
+def _event_id(kind: str, run_id: str, step_index: int) -> str:
+    """Return a deterministic trace-event UUID for retry-safe upserts.
+
+    A network timeout can happen after PostgREST has committed a trace row but
+    before its response reaches the client. Reusing a stable primary key makes
+    a retry idempotent without requiring a database migration or a new unique
+    constraint on the existing tables.
+    """
+    return str(uuid5(NAMESPACE_URL, f"pkb-agent:trace:{kind}:{run_id}:{step_index}"))
 
 
 class TracesRepository:
@@ -44,7 +56,7 @@ class TracesRepository:
         if prompt_context is not None:
             row["prompt_context"] = prompt_context
         try:
-            data = self._client.table(_RUNS).insert(row).execute().data
+            data = self._client.table(_RUNS).upsert(row, on_conflict="id").execute().data
         except Exception as e:
             raise StorageError(f"create_run failed: {e}") from e
         return data[0] if data else {}
@@ -110,6 +122,7 @@ class TracesRepository:
         ended_at: datetime | str | None = None,
     ) -> dict[str, Any]:
         row: dict[str, Any] = {
+            "id": _event_id("step", run_id, step_index),
             "run_id": run_id,
             "step_index": step_index,
             "thought": thought,
@@ -126,7 +139,7 @@ class TracesRepository:
         if prompt_context is not None:
             row["prompt_context"] = prompt_context
         try:
-            data = self._client.table(_STEPS).insert(row).execute().data
+            data = self._client.table(_STEPS).upsert(row, on_conflict="id").execute().data
         except Exception as e:
             raise StorageError(f"add_step failed: {e}") from e
         return data[0] if data else {}
@@ -159,6 +172,7 @@ class TracesRepository:
         error: str | None = None,
     ) -> dict[str, Any]:
         row: dict[str, Any] = {
+            "id": _event_id("tool_call", run_id, step_index),
             "run_id": run_id,
             "step_index": step_index,
             "tool_name": tool_name,
@@ -174,7 +188,7 @@ class TracesRepository:
         if prompt_context is not None:
             row["prompt_context"] = prompt_context
         try:
-            data = self._client.table(_TOOLCALLS).insert(row).execute().data
+            data = self._client.table(_TOOLCALLS).upsert(row, on_conflict="id").execute().data
         except Exception as e:
             raise StorageError(f"add_tool_call failed: {e}") from e
         return data[0] if data else {}

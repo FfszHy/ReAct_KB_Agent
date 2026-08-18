@@ -201,6 +201,8 @@ async def run_agent_evaluation(
                 "citations": [],
                 "answer_status": "",
                 "verification_status": "",
+                "budget_finalized": False,
+                "trace_write_failure_count": 0,
                 "error": f"{type(exc).__name__}: {exc}",
                 "execution_success": False,
                 "success": False,
@@ -215,6 +217,7 @@ async def run_agent_evaluation(
         citations = raw_citations if isinstance(raw_citations, list) else []
         citation_rows = [item for item in citations if isinstance(item, dict)]
         source_url_keys = _source_url_keys(case)
+        state_metrics = state.metrics()
         record = {
             "schema_version": 1,
             "kind": "agent",
@@ -238,12 +241,16 @@ async def run_agent_evaluation(
             "verification_status": str(state.verification.get("status") or ""),
             "answer": payload.get("answer"),
             "claims": payload.get("claims") if isinstance(payload.get("claims"), list) else [],
+            "budget_finalized": bool(state_metrics.get("budget_finalized")),
+            "trace_write_failure_count": int(
+                state_metrics.get("trace_write_failure_count") or 0
+            ),
             "error": state.error,
             # A normal insufficient-evidence response is an execution success
             # and must not be counted as an infrastructure failure.  ``success``
             # remains the stricter grounded-answer result for compatibility.
-            "execution_success": bool(state.metrics().get("execution_succeeded")),
-            "success": bool(state.metrics().get("run_succeeded")),
+            "execution_success": bool(state_metrics.get("execution_succeeded")),
+            "success": bool(state_metrics.get("run_succeeded")),
         }
         records.append(record)
         if on_progress is not None:

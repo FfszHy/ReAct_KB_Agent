@@ -31,6 +31,7 @@ from pkb_agent.llm.schemas import Message, ToolCall
 from pkb_agent.memory.manager import MemoryManager
 from pkb_agent.prompts import PromptComposer, PromptComposition, PromptRegistry
 from pkb_agent.prompts.query_rewriter import QueryPlanner
+from pkb_agent.prompts.registry import append_runtime_tool_allowlist
 from pkb_agent.rag.embeddings import EmbeddingProvider
 from pkb_agent.rag.retriever import Retriever
 from pkb_agent.storage.repositories.chunks import ChunksRepository
@@ -216,7 +217,9 @@ class AgentRuntime:
         state.messages.append(Message.user(question))
 
         await _emit(on_event, {"type": "start", "run_id": state.run_id, "question": question})
-        await self.ctx.trace.start_run(
+        await self._trace_write(
+            state,
+            "start_run",
             run_id=state.run_id,
             user_id=uid,
             question=question,
@@ -230,7 +233,9 @@ class AgentRuntime:
             state.status = AgentStatus.ERROR
             state.error = f"{type(e).__name__}: {e}"
             state.mark_finished()
-            await self.ctx.trace.finish_run(
+            await self._trace_write(
+                state,
+                "finish_run",
                 state.run_id,
                 status="error",
                 error=state.error,
@@ -243,8 +248,10 @@ class AgentRuntime:
 
     # ------------------------------------------------------------------
     async def _loop(self, state: AgentRunState, on_event: EventCallback | None) -> None:
-        max_steps = self.settings.agent_max_steps
-        while state.step_count < max_steps:
+        max_steps = max(int(self.settings.agent_max_steps), 0)
+        reserve_steps = _finalization_reserve_steps(self.settings, max_steps)
+        tool_budget = max(max_steps - reserve_steps, 0)
+        while state.step_count < tool_budget:
             completion = await self.llm.chat(
                 state.messages,
                 tools=self.registry.to_schemas(),
@@ -274,6 +281,24 @@ class AgentRuntime:
 
             thought = msg.content
             for tool_position, tc in enumerate(msg.tool_calls):
+                # A single model completion may contain several tool calls.
+                # Respect the budget inside that batch rather than allowing it
+                # to overrun ``agent_max_steps`` by one or more actions.
+                if state.step_count >= tool_budget:
+                    # Tool-call protocols require one tool response for every
+                    # assistant-issued call. Mark the skipped call as a local
+                    # budget boundary rather than leaving an unresolved call
+                    # that a provider may reject on the final no-tool turn.
+                    state.messages.append(
+                        Message.tool(
+                            tool_call_id=tc.id,
+                            name=tc.name,
+                            content=_error_observation(
+                                "tool budget exhausted; no further tool calls are allowed"
+                            ),
+                        )
+                    )
+                    continue
                 await self._execute_tool_call(
                     state,
                     tc,
@@ -282,17 +307,101 @@ class AgentRuntime:
                     emit_plan=bool(thought) and tool_position == 0,
                 )
 
-        # Exhausted step budget.
-        state.status = AgentStatus.MAX_STEPS
-        state.error = f"exceeded max_steps={max_steps}"
+        await self._finalize_from_tool_budget(
+            state,
+            max_steps=max_steps,
+            reserve_steps=reserve_steps,
+            on_event=on_event,
+        )
+
+    # ------------------------------------------------------------------
+    async def _finalize_from_tool_budget(
+        self,
+        state: AgentRunState,
+        *,
+        max_steps: int,
+        reserve_steps: int,
+        on_event: EventCallback | None,
+    ) -> None:
+        """Finish with a no-tool JSON response instead of a max-step error.
+
+        The reserved actions are intentionally not used for more retrieval:
+        when the Agent has not found enough evidence by then, more copies of
+        the same search/read pattern are rarely useful. It still gets the
+        normal verifier and its bounded repair attempts, but cannot request
+        additional tools during that finalization phase.
+        """
+        state.budget_finalized = True
+        state.messages.append(Message.user(_tool_budget_finalization_instruction()))
+        await _emit(
+            on_event,
+            {
+                "type": "tool_budget_finalization",
+                "steps": state.step_count,
+                "max_steps": max_steps,
+                "reserve_steps": reserve_steps,
+            },
+        )
+
+        # One initial final response plus the verifier's configured repair
+        # attempts. No-tool calls cannot add Agent steps, so this remains a
+        # bounded finalization path even if the model emits malformed JSON.
+        final_attempts = _answer_verification_retry_limit(self.settings) + 1
+        for _ in range(final_attempts):
+            completion = await self.llm.chat(
+                state.messages,
+                tools=None,
+                temperature=self.settings.llm_temperature,
+                max_tokens=self.settings.agent_json_output_max_tokens,
+                response_format=_JSON_OBJECT_RESPONSE_FORMAT,
+            )
+            msg = completion.first.message
+            usage = completion.usage or {}
+            state.messages.append(msg)
+            self._record_usage(state, usage)
+
+            if msg.tool_calls:
+                # This should not occur when no schemas are provided, but keep
+                # the provider message protocol valid and keep the evaluator
+                # deterministic if a compatible gateway still emits a call.
+                for tc in msg.tool_calls:
+                    state.messages.append(
+                        Message.tool(
+                            tool_call_id=tc.id,
+                            name=tc.name,
+                            content=_error_observation(
+                                "tool budget exhausted; no further tool calls are allowed"
+                            ),
+                        )
+                    )
+                state.messages.append(Message.user(_tool_budget_finalization_instruction()))
+                continue
+
+            finished = await self._handle_final_response(
+                state,
+                content=msg.content,
+                usage=usage,
+                on_event=on_event,
+            )
+            if finished:
+                return
+
+            # The standard repair instruction permits retrieving more
+            # evidence. Add a later, explicit instruction that wins for this
+            # budget-finalization turn.
+            state.messages.append(Message.user(_tool_budget_finalization_instruction()))
+
+        # Defensive fallback for a provider that repeatedly returns tool calls
+        # despite ``tools=None``. This remains a normal evidence-boundary
+        # completion rather than an infrastructure error.
+        state.status = AgentStatus.FINISHED
         await self._finalize_refusal(
             state,
-            reason="max_steps",
-            errors=[state.error],
+            reason="tool_budget_finalization_failed",
+            errors=["model did not produce a final JSON response within the tool budget"],
             on_event=on_event,
-            trace_status="max_steps",
+            trace_status="finished",
         )
-        await _emit(on_event, {"type": "max_steps", "steps": state.step_count})
 
     # ------------------------------------------------------------------
     async def _execute_tool_call(
@@ -410,8 +519,11 @@ class AgentRuntime:
         step.error = error
         state.record_tool_call(duration_ms, ok=ok)
 
-        # Trace (fire-and-forget failures are swallowed inside recorder? no — recorder raises on DB error; let it surface)
-        await self.ctx.trace.add_step(
+        # Trace persistence is retried and intentionally non-fatal. A slow
+        # observability write must not discard an otherwise usable answer.
+        await self._trace_write(
+            state,
+            "add_step",
             run_id=state.run_id,
             step_index=step.index,
             thought=thought,
@@ -425,7 +537,9 @@ class AgentRuntime:
             started_at=start_dt,
             ended_at=end_dt,
         )
-        await self.ctx.trace.add_tool_call(
+        await self._trace_write(
+            state,
+            "add_tool_call",
             run_id=state.run_id,
             step_index=step.index,
             tool_name=tc.name,
@@ -485,10 +599,13 @@ class AgentRuntime:
                 "repair_attempts": state.verification_attempts,
                 "evidence_count": len(state.evidence),
                 "cited_evidence_count": len(verdict.payload.citations),
+                "budget_finalized": state.budget_finalized,
                 "errors": [],
             }
             state.mark_finished()
-            await self.ctx.trace.finish_run(
+            await self._trace_write(
+                state,
+                "finish_run",
                 state.run_id,
                 status="finished",
                 final_answer=state.final_answer,
@@ -560,10 +677,13 @@ class AgentRuntime:
             "repair_attempts": state.verification_attempts,
             "evidence_count": len(state.evidence),
             "cited_evidence_count": 0,
+            "budget_finalized": state.budget_finalized,
             "errors": errors,
         }
         state.mark_finished()
-        await self.ctx.trace.finish_run(
+        await self._trace_write(
+            state,
+            "finish_run",
             state.run_id,
             status=trace_status,
             final_answer=state.final_answer,
@@ -591,9 +711,10 @@ class AgentRuntime:
             return self.prompt_composer.compose_system(self.registry.names())
         # Lightweight tests and third-party manual assembly remain compatible.
         return PromptComposition(
-            content=load_prompt("system_react"),
+            content=append_runtime_tool_allowlist(load_prompt("system_react"), self.registry.names()),
             phase="system",
             manifest_version="legacy",
+            available_tools=tuple(sorted(self.registry.names())),
         )
 
     def _record_usage(self, state: AgentRunState, usage: dict[str, Any] | None) -> None:
@@ -610,6 +731,31 @@ class AgentRuntime:
             output_cost_per_million=self.settings.observability_output_token_cost_per_million,
             currency=self.settings.observability_currency,
         )
+
+    async def _trace_write(
+        self,
+        state: AgentRunState,
+        operation: str,
+        *args: Any,
+        **kwargs: Any,
+    ) -> None:
+        """Record a trace operation without making trace availability fatal.
+
+        :class:`TraceRecorder` normally returns ``False`` only after its
+        bounded transient retry policy is exhausted. The ``except`` keeps
+        custom/injected trace implementations from changing the Agent's
+        answer semantics as well.
+        """
+        trace = self.ctx.trace
+        if trace is None:
+            return
+        try:
+            persisted = await getattr(trace, operation)(*args, **kwargs)
+        except Exception:
+            state.trace_write_failure_count += 1
+            return
+        if persisted is False:
+            state.trace_write_failure_count += 1
 
     async def _refresh_permission_overrides(self, on_event: EventCallback | None) -> None:
         """Refresh DB rules before a tool call, retaining YAML as the fallback.
@@ -697,6 +843,25 @@ def _answer_verification_retry_limit(settings: Settings) -> int:
         return 2
 
 
+def _finalization_reserve_steps(settings: Settings, max_steps: int) -> int:
+    """Clamp the configured no-tool finalization reserve to the tool budget."""
+    try:
+        configured = max(int(settings.agent_finalization_reserve_steps), 0)
+    except (TypeError, ValueError):
+        configured = 3
+    # Preserve at least one tool action when a positive tool budget exists.
+    return min(configured, max(max_steps - 1, 0))
+
+
+def _tool_budget_finalization_instruction() -> str:
+    return (
+        "The retrieval action budget is now exhausted. Do not call any more tools. "
+        "Return exactly one final JSON object that follows the answer contract. "
+        "Use grounded only for claims supported by evidence already observed in this run; "
+        "otherwise return the insufficient_evidence JSON shape."
+    )
+
+
 def _answer_repair_instruction(errors: list[str], evidence: Any) -> str:
     """Ask the model to repair the final JSON without weakening the contract."""
     records = [record.to_prompt_dict() for record in evidence]
@@ -715,7 +880,7 @@ def _answer_repair_instruction(errors: list[str], evidence: Any) -> str:
 
 
 def _refusal_message(reason: str) -> str:
-    if reason == "max_steps":
+    if reason in {"max_steps", "tool_budget_finalization_failed"}:
         return "无法在本轮允许的检索步骤内获得足以支撑回答的证据。"
     return "无法基于本轮检索到的证据生成可验证回答。"
 
