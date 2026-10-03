@@ -105,7 +105,8 @@ dashboard, an SVG comparison chart, and—when the agent is evaluated—a blank
 | DB client | `supabase-py` (`rpc()` for search functions) |
 | Embeddings | External OpenAI-compatible `/embeddings` endpoint (configurable) |
 | Web search | Tavily / Serper / Bing (selectable via `WEB_SEARCH_PROVIDER`) |
-| CLI | Typer (no web UI in v1) |
+| CLI | Typer + Rich |
+| API | FastAPI + HTTP/SSE |
 
 ## Architecture
 
@@ -120,48 +121,27 @@ CLI User → Typer CLI → DeepSeek ReAct Runtime → Tool Registry + Permission
     agent_steps, tool_calls, task_memory, tool_permissions)
 ```
 
-## Visual workbench
+## Client interfaces
 
-The repository also includes a browser workbench that preserves the existing
-Python Runtime as the source of truth:
+The repository provides the Python runtime, CLI, and HTTP/SSE API. A separate
+GUI can connect to the API; no GUI application is bundled in this repository.
 
-```
-Next.js workbench ──HTTP/SSE──> FastAPI boundary ──> permissioned AgentRuntime
-     upload documents                 │                       │
-     inspect citations                │                       ├─ trace + metrics
-     replay Agent Trace               │                       ├─ evidence ledger
-     approve web_fetch/memory_write ──┘                       └─ Supabase
-```
-
-It is deliberately focused on one evidence-first flow:
-
-1. upload a file and ingest it into the default knowledge base;
-2. ask a question;
-3. read a verified answer with clickable citation cards;
-4. open a citation to fetch and highlight its source chunk;
-5. expand retrieval candidates, replay the plan/tool/result timeline, or
-   approve a protected `web_fetch` / `memory_write` step;
-6. inspect end-to-end duration, token usage, completed-usage cost, and tool/run
-   success rates.
-
-The frontend is in [`web/`](web). Start both development processes after
-configuring the normal runtime secrets:
+Use the CLI directly, or start the API after configuring the runtime secrets:
 
 ```bash
-# terminal 1 — FastAPI + SSE (use the existing Conda environment)
-conda activate pkb-agent
-uvicorn pkb_agent.api.main:app --reload --port 8000
-
-# terminal 2 — lightweight Next.js UI
-cd web
-npm install
-npm run dev
+conda run -n pkb-agent pkb-agent ask "Summarize the auth design decisions in my notes"
+conda run -n pkb-agent uvicorn pkb_agent.api.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-Open `http://localhost:3000`. The frontend defaults to the API at
-`http://127.0.0.1:8000`; set `NEXT_PUBLIC_API_URL` only when the API is hosted
-elsewhere. Browser origins and the approval timeout are configured under the
-`api` section in `config/default.yaml`.
+The API exposes document upload, knowledge-base queries, verifiable answers,
+source chunks, run traces, metrics, and protected-tool approvals. Runs stream
+events through SSE. A GUI client must handle approval requests for `web_fetch`
+and `memory_write`; requests expire after the configured timeout.
+
+The API base URL is `http://127.0.0.1:8000`, with interactive API documentation
+at `/docs`. Configure the approval timeout under `api` in
+`config/default.yaml`. Browser-based GUI clients also need their origin added
+to `api.allowed_origins`, which defaults to an empty list.
 
 Per-run cost is a completed-usage calculation, shown only after the task has
 ended rather than as a pre-run prediction. The default config uses the supplied

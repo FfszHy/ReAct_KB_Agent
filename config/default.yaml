@@ -79,10 +79,10 @@ trace:
   retry_attempts: 3
   retry_backoff_seconds: 0.25
 
-# FastAPI workbench. The browser subscribes to a run with SSE and is the only
-# place an `ask`-permission tool can be approved.
+# HTTP/SSE API for external clients. Clients handle `ask`-permission approvals.
+# Add an origin here when connecting a browser-based GUI.
 api:
-  allowed_origins: [http://localhost:3000, http://127.0.0.1:3000]
+  allowed_origins: []
   approval_timeout_seconds: 300
 
 # Avoid accidentally routing database requests through a stale shell/editor

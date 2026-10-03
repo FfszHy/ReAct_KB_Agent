@@ -180,10 +180,8 @@ class Settings(BaseSettings):
     trace_retry_attempts: int = Field(default=3, ge=1, le=10)
     trace_retry_backoff_seconds: float = Field(default=0.25, ge=0, le=10)
 
-    # Visual workbench API
-    api_allowed_origins: list[str] = Field(
-        default_factory=lambda: ["http://localhost:3000", "http://127.0.0.1:3000"]
-    )
+    # HTTP/SSE API for external clients
+    api_allowed_origins: list[str] = Field(default_factory=list)
     api_approval_timeout_seconds: int = Field(default=300, ge=10, le=3600)
 
     # Observability. Prices are configurable because they are part of the
