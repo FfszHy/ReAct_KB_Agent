@@ -48,6 +48,9 @@ class Message:
     tool_calls: list[ToolCall] = field(default_factory=list)
     tool_call_id: str | None = None
     name: str | None = None
+    # Provider continuity data for thinking-mode tool turns. This must stay
+    # out of public serialization, reprs, CLI output and trace artifacts.
+    reasoning_content: str | None = field(default=None, repr=False)
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {"role": self.role}
@@ -120,12 +123,13 @@ def build_chat_request(
     max_tokens: int | None = None,
     response_format: dict[str, Any] | None = None,
     tool_choice: str | dict | None = None,
+    reasoning_effort: str | None = None,
     stream: bool = False,
 ) -> dict[str, Any]:
     """Build the JSON body for ``POST /chat/completions``."""
     body: dict[str, Any] = {
         "model": model,
-        "messages": [m.to_dict() for m in messages],
+        "messages": [_provider_message(message) for message in messages],
         "temperature": temperature,
         "stream": stream,
     }
@@ -137,7 +141,19 @@ def build_chat_request(
         body["max_tokens"] = max_tokens
     if response_format is not None:
         body["response_format"] = dict(response_format)
+    if reasoning_effort == "none":
+        body["thinking"] = {"type": "disabled"}
+    elif reasoning_effort is not None:
+        body["reasoning_effort"] = reasoning_effort
     return body
+
+
+def _provider_message(message: Message) -> dict[str, Any]:
+    """Include private continuity data only in the next provider request."""
+    payload = message.to_dict()
+    if message.role == "assistant" and message.reasoning_content is not None:
+        payload["reasoning_content"] = message.reasoning_content
+    return payload
 
 
 def parse_chat_completion(payload: dict[str, Any]) -> ChatCompletion:
@@ -146,10 +162,12 @@ def parse_chat_completion(payload: dict[str, Any]) -> ChatCompletion:
         msg_raw = raw_choice.get("message", {}) or {}
         tool_calls_raw = msg_raw.get("tool_calls") or []
         tool_calls = [ToolCall.from_raw(tc) for tc in tool_calls_raw]
+        reasoning = msg_raw.get("reasoning_content")
         message = Message(
             role=msg_raw.get("role", "assistant"),
             content=msg_raw.get("content"),
             tool_calls=tool_calls,
+            reasoning_content=reasoning if isinstance(reasoning, str) else None,
         )
         choices.append(
             ChatChoice(

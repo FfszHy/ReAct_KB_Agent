@@ -10,11 +10,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
+
+from pkb_agent.rag.provenance import source_provenance
 
 if TYPE_CHECKING:
     from pkb_agent.app.settings import Settings
@@ -39,6 +42,9 @@ class Evidence:
     locator: str | None = None
     excerpt: str | None = None
     metadata: dict[str, Any] | None = None
+    # Full text returned by the tool, retained privately for semantic review.
+    # The 500-character display excerpt is not sufficient to check a claim.
+    review_text: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Return the canonical, user-facing citation object."""
@@ -67,6 +73,9 @@ class Evidence:
                 "trust_level": metadata.get("trust_level"),
                 "expiration_state": metadata.get("expiration_state"),
             }
+        provenance = source_provenance(self.metadata)
+        if provenance:
+            item["provenance"] = provenance
         return item
 
 
@@ -150,7 +159,7 @@ class AnswerVerifier:
             return _invalid(f"answer exceeds {_MAX_ANSWER_CHARS} characters")
 
         status = raw.get("status", "grounded")
-        if status not in _ANSWER_STATUSES:
+        if not isinstance(status, str) or status not in _ANSWER_STATUSES:
             return _invalid("status must be 'grounded' or 'insufficient_evidence'")
 
         citations_raw = raw.get("citations")
@@ -179,6 +188,11 @@ class AnswerVerifier:
         unused = [citation.citation_id for citation in citations if citation.citation_id not in used_citations]
         if unused:
             return _invalid(f"citations are not attached to a claim: {', '.join(unused)}")
+
+        if status == "grounded":
+            coverage_error = _answer_claim_coverage_error(answer, claims)
+            if coverage_error:
+                return _invalid(coverage_error)
 
         return ValidationResult(
             payload=VerifiedAnswer(
@@ -257,7 +271,7 @@ class AnswerVerifier:
                 errors.append(f"claims[{index}].text must be a non-empty string")
                 continue
             kind = item.get("kind")
-            if kind not in _CLAIM_KINDS:
+            if not isinstance(kind, str) or kind not in _CLAIM_KINDS:
                 errors.append(f"claims[{index}].kind must be 'fact' or 'inference'")
                 continue
             citation_ids = item.get("citations")
@@ -292,6 +306,33 @@ class AnswerVerifier:
                 Claim(text=text.strip(), kind=str(kind), citation_ids=tuple(normalised_ids))
             )
         return claims, errors
+
+
+def _answer_claim_coverage_error(answer: str, claims: list[Claim]) -> str | None:
+    """Require exact ordered claim spans, without judging source entailment.
+
+    Whitespace between claims is presentation-only. Whitespace, punctuation,
+    qualifications, and every other character inside each claim must match.
+    This prevents the answer body from adding or changing unreviewed claims;
+    whether those claims follow from their sources remains a separate check.
+    """
+    requirement = (
+        "grounded answer must consist of exact ordered spans from claims[].text, "
+        "with only optional whitespace between them; reconstruct answer by joining "
+        "every claim text verbatim in claims order, without extra prose"
+    )
+    cursor = 0
+    for index, claim in enumerate(claims):
+        while cursor < len(answer) and answer[cursor].isspace():
+            cursor += 1
+        if not answer.startswith(claim.text, cursor):
+            return f"{requirement}; claims[{index}].text does not match at answer character {cursor}"
+        cursor += len(claim.text)
+    while cursor < len(answer) and answer[cursor].isspace():
+        cursor += 1
+    if cursor != len(answer):
+        return f"{requirement}; uncovered answer text starts at character {cursor}"
+    return None
 
 
 def extract_evidence(
@@ -367,10 +408,14 @@ def _kb_evidence(row: Any) -> Evidence | None:
         title=_string_or_none(row.get("doc_title") or row.get("title")),
         locator=_string_or_none(row.get("source_uri") or row.get("document_id")),
         excerpt=_truncate_excerpt(excerpt),
+        review_text=excerpt,
         metadata={
-            key: row[key]
-            for key in ("document_id", "chunk_index", "score", "vector_score", "fts_score")
-            if row.get(key) is not None
+            **{
+                key: row[key]
+                for key in ("document_id", "chunk_index", "score", "vector_score", "fts_score")
+                if row.get(key) is not None
+            },
+            **source_provenance(row.get("provenance")),
         },
     )
 
@@ -402,13 +447,19 @@ def _kb_catalog_evidence(result: Mapping[str, Any]) -> Evidence | None:
         "count": len(labels),
         "next_offset": result.get("next_offset"),
     }
+    # Offset alone is not a page identity: changing limit (or catalog contents)
+    # can return different evidence at the same offset during a single run.
+    fingerprint = hashlib.sha256(
+        json.dumps(dict(result), sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
+    ).hexdigest()[:12]
     return Evidence(
-        citation_id=f"kbcatalog:{offset}",
+        citation_id=f"kbcatalog:{offset}:{fingerprint}",
         source_type="kb_catalog",
         source_id=f"catalog:{offset}",
         title=f"知识库资料目录 - 第 {first_item} 至 {last_item} 份",
         locator=f"kb://catalog?offset={offset}",
         excerpt=_truncate_excerpt(summary),
+        review_text=json.dumps(dict(result), ensure_ascii=False, default=str),
         metadata=metadata,
     )
 
@@ -451,6 +502,7 @@ def _web_evidence(
         title=_string_or_none(row.get("title")),
         locator=locator,
         excerpt=_truncate_excerpt(text),
+        review_text=text,
         metadata=metadata,
     )
 
@@ -505,3 +557,77 @@ def _non_negative_int(value: Any, *, default: int) -> int:
 
 def _invalid(*errors: str) -> ValidationResult:
     return ValidationResult(errors=tuple(errors))
+
+
+def answer_char_limit(question: str) -> int | None:
+    """Recognize explicit character limits, not incidental numbers in a task.
+
+    Limits count Unicode characters (including spaces/punctuation) in answer;
+    structured claims and source metadata are outside that display limit.
+    Ambiguous requests can use the CLI's explicit --max-answer-chars option.
+    """
+    patterns = (
+        r"(?:回答|答复|正文)[^\d。\uff01\uff1f\n]{0,12}?(\d{1,5})\s*(?:个字符|字符|字(?![段节]))\s*(?:以内|内|以下)",
+        r"(?:^|[。,\uff0c;\uff1b\n])\s*(?:请)?(?:控制在|最多|不超过)\s*(\d{1,5})\s*(?:个字符|字符|字(?![段节]))",
+        r"(?:^(?:use|write)\s+|(?:answer|reply|response)\D{0,20}?)(?:at most|no more than|within)\s+(\d{1,5})\s+characters\b",
+    )
+    limits = [int(m.group(1)) for pattern in patterns for m in re.finditer(pattern, question, re.I)]
+    return min((limit for limit in limits if limit > 0), default=None)
+
+
+def merge_evidence(previous: Evidence | None, current: Evidence) -> Evidence:
+    """Keep known KB provenance when a later observation is less complete.
+
+    Web evidence describes a particular fetch, so its metadata and content must
+    stay together. Only observations of the same KB chunk can fill each other's
+    missing fields; a document UUID fallback must not replace a known URI.
+    """
+    from dataclasses import replace
+
+    if (
+        previous is None
+        or previous.source_type != "kb_chunk"
+        or current.source_type != "kb_chunk"
+        or previous.citation_id != current.citation_id
+        or previous.source_id != current.source_id
+    ):
+        return current
+    old_metadata = previous.metadata or {}
+    new_metadata = current.metadata or {}
+    old_document = old_metadata.get("document_id")
+    new_document = new_metadata.get("document_id")
+    if old_document and new_document and old_document != new_document:
+        return current
+    old_provenance = source_provenance(old_metadata)
+    new_provenance = source_provenance(new_metadata)
+    for field in ("upstream_sha256", "upstream_revision"):
+        old_value = old_provenance.get(field)
+        new_value = new_provenance.get(field)
+        if old_value and new_value:
+            if field == "upstream_sha256":
+                old_value, new_value = old_value.lower(), new_value.lower()
+            if old_value != new_value:
+                # A newer source snapshot must stay internally consistent:
+                # never attach its version/hash to an older, longer passage.
+                return current
+
+    locator = current.locator
+    if not locator or (locator == new_document and previous.locator):
+        locator = previous.locator or locator
+    metadata = dict(old_metadata)
+    metadata.update({key: value for key, value in new_metadata.items() if value is not None})
+    return replace(
+        current,
+        title=current.title or previous.title,
+        locator=locator,
+        metadata=metadata,
+        excerpt=_more_complete_text(previous.excerpt, current.excerpt),
+        review_text=_more_complete_text(previous.review_text, current.review_text),
+    )
+
+
+def _more_complete_text(previous: str | None, current: str | None) -> str | None:
+    # A search preview must not discard an already-read, longer passage.
+    if len(previous or "") > len(current or ""):
+        return previous
+    return current or previous

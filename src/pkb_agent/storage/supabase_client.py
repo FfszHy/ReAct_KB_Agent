@@ -8,6 +8,9 @@ brief blocking on DB I/O is acceptable for a single-user CLI. Slow network I/O
 
 from __future__ import annotations
 
+import logging
+import ssl
+import time
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -16,6 +19,10 @@ from pkb_agent.agent.errors import ConfigError, StorageError
 
 if TYPE_CHECKING:
     from pkb_agent.app.settings import Settings
+
+_LOG = logging.getLogger(__name__)
+_READ_ONLY_RPCS = frozenset({"rag_vector_search", "rag_fts_search", "rag_hybrid_search"})
+_TRANSIENT_RPC_ERRORS = (httpx.TransportError, TimeoutError, ConnectionError, ssl.SSLError)
 
 
 def format_vector(vec: list[float]) -> str:
@@ -93,10 +100,22 @@ class SupabaseClient:
         return self._client.table(name)
 
     def rpc(self, name: str, params: dict[str, Any]):
-        try:
-            return self._client.rpc(name, params).execute()
-        except Exception as e:
-            raise StorageError(f"rpc '{name}' failed: {e}") from e
+        # Only these known read RPCs are safe to repeat after a dropped
+        # connection. A write may already have committed before it disconnects.
+        attempts = 3 if name in _READ_ONLY_RPCS else 1
+        for attempt in range(1, attempts + 1):
+            try:
+                return self._client.rpc(name, params).execute()
+            except Exception as exc:
+                if attempt == attempts or not isinstance(exc, _TRANSIENT_RPC_ERRORS):
+                    # Keep the underlying exception available to diagnostics,
+                    # without copying request details into a surfaced message.
+                    raise StorageError(f"rpc '{name}' failed: {type(exc).__name__}") from exc
+                _LOG.warning(
+                    "retrying read rpc name=%s exception=%s attempt=%d/%d",
+                    name, type(exc).__name__, attempt, attempts,
+                )
+                time.sleep(0.25 * (2 ** (attempt - 1)))
 
     def close(self) -> None:
         """Release the explicitly owned HTTP connection pool."""

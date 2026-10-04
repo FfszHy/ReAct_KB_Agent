@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from pkb_agent.agent.errors import StorageError
+from pkb_agent.rag.provenance import source_provenance
 from pkb_agent.storage.supabase_client import SupabaseClient, format_vector
 
 _CHUNKS = "document_chunks"
@@ -32,29 +33,43 @@ class ChunksRepository:
         """Return a chunk joined with its document's title/source_uri."""
         data = (
             self._client.table(_CHUNKS)
-            .select("*, documents(title, source_uri, source_type)")
+            .select("*, documents(title, source_uri, source_type, meta)")
             .eq("id", chunk_id)
             .execute()
             .data
         )
         if not data:
             return None
-        row = data[0]
-        doc = row.pop("documents", None) or {}
-        if isinstance(doc, list):
-            doc = doc[0] if doc else {}
-        row["document"] = doc
-        return row
+        return _with_document(data[0])
 
     def list_by_document(self, document_id: str) -> list[dict[str, Any]]:
-        return (
+        """Return ordered chunks with provenance, including on a direct read."""
+        rows = (
             self._client.table(_CHUNKS)
-            .select("*")
+            .select("*, documents(title, source_uri, source_type, meta)")
             .eq("document_id", document_id)
             .order("chunk_index", desc=False)
             .execute()
             .data
         )
+        return [_with_document(row) for row in (rows or [])]
+
+    def get_document_provenance(self, document_ids: list[str]) -> dict[str, dict[str, str]]:
+        """Read only corpus provenance for documents already returned by search."""
+        if not document_ids:
+            return {}
+        rows = (
+            self._client.table("documents")
+            .select("id, meta")
+            .in_("id", sorted(set(document_ids)))
+            .execute()
+            .data
+        )
+        return {
+            str(row["id"]): source_provenance(row.get("meta"))
+            for row in (rows or [])
+            if isinstance(row, dict) and row.get("id")
+        }
 
     def delete_by_document(self, document_id: str) -> None:
         # document_chunks cascade-deletes embeddings; chunks cascade from documents.
@@ -155,3 +170,13 @@ class ChunksRepository:
         if user_id is not None:
             params["p_user_id"] = user_id
         return self._client.rpc("rag_hybrid_search", params).data or []
+
+
+def _with_document(row: dict[str, Any]) -> dict[str, Any]:
+    """Normalize PostgREST's joined relation without mutating the stored row."""
+    result = dict(row)
+    document = result.pop("documents", None) or {}
+    if isinstance(document, list):
+        document = document[0] if document else {}
+    result["document"] = document
+    return result

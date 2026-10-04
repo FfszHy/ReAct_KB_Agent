@@ -130,13 +130,15 @@ Use the CLI directly, or start the API after configuring the runtime secrets:
 
 ```bash
 conda run -n pkb-agent pkb-agent ask "Summarize the auth design decisions in my notes"
+conda run -n pkb-agent pkb-agent ask "回答控制在250字以内：概括知识库中的认证设计" --kb-only --max-answer-chars 250
 conda run -n pkb-agent uvicorn pkb_agent.api.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
 The API exposes document upload, knowledge-base queries, verifiable answers,
 source chunks, run traces, metrics, and protected-tool approvals. Runs stream
-events through SSE. A GUI client must handle approval requests for `web_fetch`
-and `memory_write`; requests expire after the configured timeout.
+events through SSE. A GUI client must handle approval requests for tools whose
+effective permission is `ask` (`web_fetch` by default); requests expire after
+the configured timeout.
 
 The API base URL is `http://127.0.0.1:8000`, with interactive API documentation
 at `/docs`. Configure the approval timeout under `api` in
@@ -152,8 +154,8 @@ compatible endpoint omits them, it conservatively prices that input as a cache
 miss. Update the `observability` rates whenever the model or account contract
 changes.
 
-**Core invariant:** the Agent Runtime never touches Supabase, the network, or
-memory directly. It can only call tools. Each tool call passes through:
+**Core invariant:** world access goes through tools; model calls, permission
+refreshes and trace writes are separate runtime infrastructure. Each tool call passes through:
 parameter validation → permission check → trace recording → execution → result
 truncation → error wrapping.
 
@@ -168,20 +170,64 @@ with a configurable completion ceiling before applying that validation.
 
 - Each claim is labelled `fact` (source directly states it) or `inference`
   (the model's conclusion from cited facts), and both require evidence.
-- `answer` remains the complete, user-facing explanation; `claims` are the
-  atomic evidence audit for that explanation, not a replacement summary.
+- `answer` is the complete, user-facing explanation. Its `claims[].text` must
+  reproduce that answer exactly in order, with only whitespace between spans.
+  Extra assertions, altered qualifiers, reordered or paraphrased claims fail
+  deterministically before semantic review. Source entailment remains a
+  separate, fallible model judgement.
 - A rejected answer gets a bounded repair turn; the agent may retrieve more
   evidence. If it still cannot provide a valid answer, the runtime returns an
   explicit `insufficient_evidence` response rather than passing through prose.
+- By default, a separate model call reviews the whole answer and claims against
+  the text returned by this run's tools, including uncited retrieved exceptions.
+  It checks source support, scope, conditional inferences and answer/claim
+  coverage. A pass requires a check for every claim, a brief support assessment
+  and exact source excerpts. The runtime validates that positive support excerpts
+  really occur in that claim's cited source. An exact excerpt alone still does
+  not prove entailment. The reviewer has no tools. For `insufficient_evidence`, the runtime publishes a
+  controlled evidence-boundary message instead of the model's free-form draft;
+  this prevents uncited claims from being hidden in refusals. This **fallible AI check
+  is not a factual-correctness certificate**. Source text beyond the review input
+  limit, invalid reviewer output or service failure blocks publication and is
+  recorded as `semantic_review_unavailable`; it is not silently treated as a pass.
+- `verification` records structure checks, semantic review history, repair count
+  and length. `verified` means both checks passed; disabling semantic review
+  produces `structure_verified`. Legacy runs without these fields only checked
+  structure and source IDs. Review calls count toward usage and cost.
+- `--kb-only` exposes only `rag_search`, `rag_read`, and `rag_list_documents`.
+  It still connects to the model, embeddings and knowledge-base services; it
+  disables web and memory tools, not all network access. A natural-language
+  request alone is not the same programmatic restriction.
+- `--max-answer-chars` bounds the answer body by Unicode characters including
+  punctuation and spaces. Common explicit character limits in the question are
+  also recognized. Overlong answers are rewritten, never cut mid-sentence;
+  claims and source metadata are outside the body limit.
 - Web search snippets are never citation-eligible by themselves. A page must
   be fetched with `web_fetch`; its citation records fetch time, domain, trust
   tier, expiry state, content hash, and truncation state.
 - The Rich CLI renders **原文事实 / Source facts** and **模型推断 / Model
   inferences** in separate panels. `pkb-agent ask --json` exposes the complete
   answer object, cited evidence, and verifier audit for other UIs.
+- The CLI shows main model decision rounds separately from tool calls and
+  semantic review. Several tools in one batch are one decision round; query
+  rewriting is also separate. These events do not expose private reasoning.
 
 Configure web-page freshness and high-trust domains in `config/default.yaml`
 under `web.evidence_ttl_hours` and `web.trusted_domains`.
+Semantic review defaults and its input ceiling are under
+`agent.semantic_review_enabled`, `agent.semantic_review_max_chars`,
+`agent.semantic_review_max_tokens` and `agent.semantic_review_reasoning_effort`.
+The reviewer defaults to `low` effort, a 16384-token completion ceiling and
+200000 input characters. Live reviews exhausted 8192 tokens, and one multi-document
+run exceeded the former 80000-character input ceiling. These bounds still apply:
+oversized input or incomplete output blocks publication. The main Agent's reasoning
+setting is unchanged. `none` is supported as an explicit provider option, but a
+targeted comparison missed an unsupported repair claim in that mode, so it is
+not the default. Local `.env` values override YAML defaults; check the effective
+configuration when upgrading an existing installation.
+The provider's supported effort
+controls are documented in [DeepSeek thinking mode](https://api-docs.deepseek.com/guides/thinking_mode/).
+For a real terminal demonstration, see [Ghostty recording](docs/ghostty-recording.md).
 
 ### Prompt lifecycle
 

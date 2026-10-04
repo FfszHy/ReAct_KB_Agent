@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from pkb_agent.rag.provenance import source_provenance
 from pkb_agent.tools.base import BaseTool, ToolContext, ToolParam
 from pkb_agent.tools.result import ToolResult
 
@@ -58,8 +59,12 @@ class RagReadTool(BaseTool):
                         {
                             "chunk_index": r.get("chunk_index"),
                             "chunk_id": r.get("id"),
+                            "document_id": r.get("document_id") or str(document_id),
                             "content": r.get("content"),
                             "token_count": r.get("token_count"),
+                            "doc_title": (r.get("document") or {}).get("title"),
+                            "source_uri": (r.get("document") or {}).get("source_uri"),
+                            "provenance": source_provenance((r.get("document") or {}).get("meta")),
                         }
                         for r in rows
                     ],
@@ -94,6 +99,7 @@ def _chunk_payload(row: dict[str, Any]) -> dict[str, Any]:
         "content": row.get("content"),
         "doc_title": (row.get("document") or {}).get("title"),
         "source_uri": (row.get("document") or {}).get("source_uri"),
+        "provenance": source_provenance((row.get("document") or {}).get("meta")),
         "meta": row.get("meta"),
     }
 

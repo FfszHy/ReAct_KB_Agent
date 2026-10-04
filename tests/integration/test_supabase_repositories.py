@@ -313,7 +313,49 @@ def test_chunks_get_chunk_with_doc_flattens_documents_key():
     assert row["document"] == {"title": "Doc", "source_uri": "u", "source_type": "text"}
     assert "documents" not in row  # popped into "document"
     select_call = client.find_call("select", "document_chunks")
-    assert "documents(title, source_uri, source_type)" in select_call["cols"]
+    assert "documents(title, source_uri, source_type, meta)" in select_call["cols"]
+
+
+@pytest.mark.parametrize("relation_as_list", [False, True])
+def test_list_chunks_by_document_joins_provenance_in_both_relation_shapes(relation_as_list):
+    document = {"title": "Reference", "source_uri": "eval://reference", "source_type": "text"}
+    stored_row = {
+        "id": "c1",
+        "document_id": "d1",
+        "chunk_index": 0,
+        "content": "Evidence.",
+        "documents": [document] if relation_as_list else document,
+    }
+    client = _FakeSupabaseClient().queue([stored_row])
+
+    rows = ChunksRepository(client).list_by_document("d1")
+
+    assert rows[0]["document"] == document
+    assert "documents" not in rows[0]
+    assert "documents" in stored_row
+    assert "documents(title, source_uri, source_type, meta)" in client.find_call("select")["cols"]
+    assert client.find_call("eq")["val"] == "d1"
+    assert client.find_call("order") == {
+        "op": "order", "table": "document_chunks", "col": "chunk_index", "desc": False,
+    }
+
+
+def test_list_chunks_by_document_handles_no_rows():
+    client = _FakeSupabaseClient().queue(None)
+    assert ChunksRepository(client).list_by_document("missing") == []
+
+
+def test_document_provenance_is_batched_and_restricted_to_source_fields():
+    client = _FakeSupabaseClient().queue([
+        {"id": "d1", "meta": {"upstream_revision": "v2.10.6", "private_note": "hidden"}},
+        {"id": "d2", "meta": None},
+    ])
+
+    provenance = ChunksRepository(client).get_document_provenance(["d2", "d1", "d1"])
+
+    assert provenance == {"d1": {"upstream_revision": "v2.10.6"}, "d2": {}}
+    assert client.find_call("select")["cols"] == "id, meta"
+    assert client.find_call("in")["values"] == ["d1", "d2"]
 
 
 # --------------------------------------------------------------------------- #

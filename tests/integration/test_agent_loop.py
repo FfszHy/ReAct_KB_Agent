@@ -146,7 +146,7 @@ class _PassthroughAnswerVerifier:
                 answer=content or "",
                 claims=(),
                 citations=(),
-                status="insufficient_evidence",
+                status="grounded",
             )
         )
 
@@ -200,7 +200,8 @@ def _make_runtime(
     strict_verification: bool = False,
 ) -> AgentRuntime:
     """Build an AgentRuntime with mocked dependencies (no real services)."""
-    settings = Settings(agent_max_steps=max_steps, agent_tool_result_max_chars=1000)
+    settings = Settings(agent_max_steps=max_steps, agent_tool_result_max_chars=1000,
+                        agent_semantic_review_enabled=False)
     rt = AgentRuntime(settings)
     rt.llm = MagicMock()
     rt.llm.chat = AsyncMock(side_effect=llm_side_effect)
@@ -593,7 +594,7 @@ async def test_run_repairs_invalid_citations_against_this_runs_evidence_ledger()
 
     assert state.status is AgentStatus.FINISHED
     assert state.final_answer == "Use SSO for authentication."
-    assert state.verification["status"] == "verified"
+    assert state.verification["status"] == "structure_verified"
     assert state.verification["repair_attempts"] == 1
     assert state.answer_payload["citations"][0]["source_id"] == "chunk-1"
     assert "citation_evidence" in (state.messages[3].content or "")
@@ -624,6 +625,192 @@ async def test_run_refuses_when_final_answer_cannot_be_verified():
     assert state.answer_payload["citations"] == []
     finish_kwargs = trace.finish_run.call_args.kwargs
     assert finish_kwargs["verification"]["status"] == "refused"
+
+
+def _grounded_candidate(text: str) -> str:
+    return json.dumps({
+        "status": "grounded", "answer": text,
+        "claims": [{"text": text, "kind": "fact", "citations": ["kb:chunk-1"]}],
+        "citations": [{"id": "kb:chunk-1"}],
+    })
+
+
+def _supported_review(claim_count: int = 1) -> str:
+    return json.dumps({"status": "passed", "errors": [], "checks": [
+        {"claim_index": index, "supported": True,
+         "reason": "The retrieved source directly recommends SSO for authentication.",
+         "evidence": [{"id": "kb:chunk-1", "quote": "Use SSO for authentication."}]}
+        for index in range(claim_count)
+    ]})
+
+
+async def test_uncovered_answer_text_is_repaired_before_semantic_review_and_publication():
+    repaired = json.loads(_grounded_candidate("Use SSO for authentication."))
+    repaired["claims"].append({
+        "text": "Authentication is the use case covered by this recommendation.",
+        "kind": "fact",
+        "citations": ["kb:chunk-1"],
+    })
+    repaired["answer"] = "\n\n".join(claim["text"] for claim in repaired["claims"])
+    invalid = {**repaired, "answer": "Only SSO works.\n" + repaired["answer"]}
+    rt = _make_runtime(
+        llm_side_effect=[
+            _tool_completion("", ToolCall(id="t1", name="rag_search", arguments={"query": "auth"})),
+            _answer_completion(json.dumps(invalid)),
+            _answer_completion(json.dumps(repaired)),
+            _answer_completion(_supported_review(2)),
+        ], tools=[_EvidenceRagTool()], strict_verification=True,
+    )
+    rt.settings.agent_semantic_review_enabled = True
+    events = []
+
+    state = await rt.run("What does the document recommend?", on_event=events.append)
+
+    assert state.final_answer == repaired["answer"]
+    assert state.answer_payload["claims"] == repaired["claims"]
+    assert state.verification["status"] == "verified"
+    assert state.verification["repair_attempts"] == 1
+    assert [review["status"] for review in state.semantic_reviews] == ["passed"]
+    assert rt.llm.chat.await_count == 4  # no semantic review of the structurally invalid answer
+    review_input = json.loads(rt.llm.chat.call_args.args[0][-1].content)
+    assert review_input["candidate"]["answer"] == repaired["answer"]
+    assert review_input["candidate"]["claims"] == [
+        {"claim_index": index, **claim} for index, claim in enumerate(repaired["claims"])
+    ]
+    failed = next(event for event in events if event["type"] == "answer_verification_failed")
+    assert "exact ordered spans" in failed["errors"][0]
+    assert [event["answer"] for event in events if event["type"] == "answer"] == [repaired["answer"]]
+
+
+async def test_semantic_failure_repairs_before_publishing_and_counts_review_cost():
+    rt = _make_runtime(
+        llm_side_effect=[
+            _tool_completion("", ToolCall(id="t1", name="rag_search", arguments={"query": "auth"})),
+            _answer_completion(_grounded_candidate("Only SSO can authenticate users.")),
+            _answer_completion('{"status":"failed","errors":["Only is not supported by the source"]}'),
+            _answer_completion(_grounded_candidate("Use SSO for authentication.")),
+            _answer_completion(_supported_review()),
+        ], tools=[_EvidenceRagTool()], strict_verification=True,
+    )
+    rt.settings.agent_semantic_review_enabled = True
+    events = []
+    state = await rt.run("What does the document recommend?", on_event=events.append)
+    assert state.final_answer == "Use SSO for authentication."
+    assert state.verification["status"] == "verified"
+    assert state.verification["scope"] == "citation_integrity_and_model_review"
+    assert state.verification["repair_attempts"] == 1
+    assert [r["status"] for r in state.semantic_reviews] == ["failed", "passed"]
+    assert state.usage["total_tokens"] == 60
+    assert state.model_rounds == 3  # tool round + two candidates, excluding review calls
+    assert [e["observed_tool_results"] for e in events if e["type"] == "model_turn"] == [0, 1, 1]
+    assert [e["answer"] for e in events if e["type"] == "answer"] == [state.final_answer]
+    assert "Only is not supported" in state.messages[-2].content
+
+
+async def test_semantic_service_failure_stops_without_useless_answer_rewrites():
+    from pkb_agent.agent.errors import LLMError
+
+    rt = _make_runtime(
+        llm_side_effect=[
+            _tool_completion("", ToolCall(id="t1", name="rag_search", arguments={"query": "auth"})),
+            _answer_completion(_grounded_candidate("Use SSO.")),
+            LLMError("offline"),
+        ], tools=[_EvidenceRagTool()], strict_verification=True,
+    )
+    rt.settings.agent_semantic_review_enabled = True
+    state = await rt.run("What do we know?")
+    assert state.verification["status"] == "refused"
+    assert state.verification["reason"] == "semantic_review_unavailable"
+    assert state.verification["repair_attempts"] == 0
+    assert rt.llm.chat.await_count == 3
+    assert not state.metrics()["run_succeeded"]
+
+
+async def test_answer_length_limit_repairs_complete_json_without_truncating():
+    def refusal(text):
+        return json.dumps({"status": "insufficient_evidence", "answer": text,
+                           "claims": [], "citations": []})
+    rt = _make_runtime(llm_side_effect=[
+        _answer_completion(refusal("There is not enough evidence to answer this question.")),
+        _answer_completion(refusal("无法确定。")),
+    ], strict_verification=True)
+    state = await rt.run("回答控制在10字以内。")
+    assert state.max_answer_chars == 10
+    assert state.final_answer == "无法确定。"
+    assert state.verification_attempts == 1
+    assert "shorten it" in state.messages[-2].content
+
+
+async def test_grounded_length_repair_preserves_complete_claim_and_citation_contract():
+    rt = _make_runtime(llm_side_effect=[
+        _tool_completion("", ToolCall(id="t1", name="rag_search", arguments={"query": "auth"})),
+        _answer_completion(_grounded_candidate("Use SSO for authentication.")),
+        _answer_completion(_grounded_candidate("Use SSO.")),
+    ], tools=[_EvidenceRagTool()], strict_verification=True)
+    events = []
+
+    state = await rt.run("回答控制在10字以内。", on_event=events.append)
+
+    assert state.max_answer_chars == 10
+    assert state.final_answer == "Use SSO."
+    assert state.answer_payload["claims"][0]["text"] == state.final_answer
+    assert state.answer_payload["citations"][0]["id"] == "kb:chunk-1"
+    assert state.verification["status"] == "structure_verified"
+    assert state.verification_attempts == 1
+    assert "shorten it" in state.messages[-2].content
+    assert rt.llm.chat.await_count == 3
+    assert [event["answer"] for event in events if event["type"] == "answer"] == ["Use SSO."]
+
+
+async def test_refusal_never_publishes_uncited_claims_hidden_in_its_body():
+    candidate = json.dumps({"status": "insufficient_evidence",
+                            "answer": "No records, but measured p99 is 12 ms.",
+                            "claims": [], "citations": []})
+    rt = _make_runtime(llm_side_effect=[_answer_completion(candidate)], strict_verification=True)
+    rt.settings.agent_semantic_review_enabled = True
+    state = await rt.run("What is the measured p99?")
+    assert "12" not in state.final_answer
+    assert "无法" in state.final_answer
+    assert state.verification["answer_origin"] == "runtime_boundary_template"
+    assert state.verification["semantic_review"]["status"] == "not_required"
+    assert rt.llm.chat.await_count == 1
+    assert any(message.content == candidate for message in state.messages)
+
+
+@pytest.mark.parametrize("limit", [1, 2, 5])
+async def test_validation_failure_boundary_respects_answer_limit(limit):
+    rt = _make_runtime(llm_side_effect=[_answer_completion("not JSON")], strict_verification=True)
+    rt.settings.agent_answer_verification_max_retries = 0
+
+    state = await rt.run("Give an answer.", max_answer_chars=limit)
+
+    assert state.verification["reason"] == "answer_validation_failed"
+    assert 0 < len(state.final_answer) <= limit
+    assert state.verification["answer_chars"] == len(state.final_answer)
+    assert state.verification["max_answer_chars"] == limit
+    assert state.answer_payload["claims"] == []
+
+
+async def test_truncated_json_or_semantic_failures_are_bounded_and_never_published():
+    rt = _make_runtime(llm_side_effect=[
+        _tool_completion("", ToolCall(id="t1", name="rag_search", arguments={"query": "auth"})),
+        _answer_completion(_grounded_candidate("Only SSO works.")),
+        _answer_completion('{"status":"failed","errors":["unsupported exclusive claim"]}'),
+    ], tools=[_EvidenceRagTool()], strict_verification=True)
+    rt.settings.agent_semantic_review_enabled = True
+    rt.settings.agent_answer_verification_max_retries = 0
+    state = await rt.run("What is supported?")
+    assert state.verification["status"] == "refused"
+    assert "Only SSO" not in state.final_answer
+    assert state.semantic_reviews[-1]["status"] == "failed"
+
+    cut_off = _answer_completion(_grounded_candidate("Use SSO."))
+    cut_off.choices[0].finish_reason = "length"
+    rt2 = _make_runtime(llm_side_effect=[cut_off], strict_verification=True)
+    rt2.settings.agent_answer_verification_max_retries = 0
+    state2 = await rt2.run("Answer briefly.")
+    assert state2.verification["status"] == "refused"
+    assert "output token limit" in state2.verification["errors"][0]
 
 
 # --------------------------------------------------------------------------- #

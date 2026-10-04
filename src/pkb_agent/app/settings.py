@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import Field
@@ -135,6 +135,12 @@ class Settings(BaseSettings):
     agent_tool_result_max_chars: int = 6000
     agent_temperature: float = 0.2
     agent_answer_verification_max_retries: int = 2
+    # Model-based review supplements deterministic citation/schema checks.
+    # It can still miss errors; disabled review is reported explicitly.
+    agent_semantic_review_enabled: bool = True
+    agent_semantic_review_max_chars: int = Field(default=200000, ge=1000, le=200000)
+    agent_semantic_review_max_tokens: int = Field(default=16384, ge=256, le=32768)
+    agent_semantic_review_reasoning_effort: Literal["none", "low", "high", "max"] = "low"
     # Reserve a few retrieval actions for a no-tool final-answer turn. This
     # prevents a repeated read/search loop from spending the complete budget
     # and being converted into a hard execution failure.

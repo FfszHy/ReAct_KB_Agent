@@ -106,6 +106,7 @@ class DeepSeekClient:
         max_tokens: int | None = None,
         response_format: dict[str, Any] | None = None,
         tool_choice: str | dict | None = None,
+        reasoning_effort: str | None = None,
     ) -> ChatCompletion:
         body = build_chat_request(
             model=self._model,
@@ -115,6 +116,7 @@ class DeepSeekClient:
             max_tokens=max_tokens,
             response_format=response_format,
             tool_choice=tool_choice,
+            reasoning_effort=reasoning_effort,
             stream=False,
         )
         client = self._ensure_client()

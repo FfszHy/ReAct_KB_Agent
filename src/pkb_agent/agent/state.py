@@ -84,6 +84,9 @@ class AgentRunState:
     verification: dict = field(default_factory=dict)
     evidence: dict[str, Evidence] = field(default_factory=dict)
     verification_attempts: int = 0
+    max_answer_chars: int | None = None
+    model_rounds: int = 0
+    semantic_reviews: list[dict] = field(default_factory=list)
     # ``budget_finalized`` means the runtime stopped further tool execution
     # deliberately and requested a final no-tool JSON answer. It is a normal
     # terminal path, not a max-step execution error.
@@ -237,6 +240,8 @@ class AgentRunState:
             "question": self.question,
             "status": self.status.value,
             "step_count": self.step_count,
+            "model_rounds": self.model_rounds,
+            "max_answer_chars": self.max_answer_chars,
             "steps": [s.to_dict() for s in self.steps],
             "prompt_context": self.prompt_context,
             "final_answer": self.final_answer,

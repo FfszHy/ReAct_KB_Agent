@@ -50,6 +50,17 @@ def ask(
     user_id: str = typer.Option("default", "--user", "-u", help="User id scope."),
     json_output: bool = typer.Option(False, "--json", help="Emit final state as JSON."),
     max_steps: int | None = typer.Option(None, "--max-steps", help="Override max steps."),
+    kb_only: bool = typer.Option(
+        False,
+        "--kb-only",
+        help="Allow only KB search/read/catalog tools; model and KB service requests still use the network.",
+    ),
+    max_answer_chars: int | None = typer.Option(
+        None,
+        "--max-answer-chars",
+        min=1,
+        help="Maximum characters in the answer body (claims and citations excluded).",
+    ),
     yes: bool = typer.Option(False, "--yes", "-y", help="Auto-approve ask-permission tools."),
 ) -> None:
     """Ask the agent a question (ReAct loop)."""
@@ -63,9 +74,19 @@ def ask(
         _render_event(event)
 
     async def _run() -> None:
-        rt = AgentRuntime.build(settings, user_id=user_id, confirm=confirm)
+        build_options: dict[str, Any] = {"user_id": user_id, "confirm": confirm}
+        if kb_only:
+            build_options["allowed_tools"] = ["rag_search", "rag_read", "rag_list_documents"]
+        rt = AgentRuntime.build(settings, **build_options)
         async with rt:
-            state = await rt.run(question, on_event=on_event)
+            if kb_only and not json_output:
+                console.print(
+                    "[dim]工具范围: 仅知识库检索、阅读和目录; 仍会访问模型与知识库服务。[/dim]"
+                )
+            run_options: dict[str, Any] = {"on_event": on_event}
+            if max_answer_chars is not None:
+                run_options["max_answer_chars"] = max_answer_chars
+            state = await rt.run(question, **run_options)
             if json_output:
                 console.print_json(json.dumps(state.to_dict(), ensure_ascii=False))
             else:
@@ -683,6 +704,18 @@ def _render_event(event: dict[str, Any]) -> None:
     etype = event.get("type")
     if etype == "start":
         console.print(Panel(event.get("question", ""), title="Question", border_style="cyan"))
+    elif etype == "model_turn":
+        tools = event.get("tools") or []
+        action = "选择工具: " + ", ".join(str(name) for name in tools)
+        if event.get("phase") == "answer":
+            action = "提交候选答案"
+        console.print(
+            Text(
+                f"ReAct 第 {event.get('round')} 轮 · {action} · "
+                f"已观察 {event.get('observed_tool_results', 0)} 次工具结果",
+                style="bold cyan",
+            )
+        )
     elif etype == "tool_call":
         args = event.get("args", {})
         args_str = json.dumps(args, ensure_ascii=False)
@@ -710,6 +743,14 @@ def _render_event(event: dict[str, Any]) -> None:
             "[yellow]answer verification failed; requesting a repair "
             f"({event.get('retry')}/{event.get('retry_limit')}):[/yellow] {first_error}"
         )
+    elif etype == "answer_semantic_review":
+        status = event.get("status")
+        labels = {"running": "进行中", "passed": "通过", "failed": "未通过", "unavailable": "不可用"}
+        label = labels.get(str(status), str(status or "未知"))
+        color = "green" if status == "passed" else "yellow"
+        console.print(
+            Text(f"AI 语义复核 · 第 {event.get('attempt')} 次 · {label}", style=color)
+        )
     elif etype == "max_steps":
         console.print(f"[yellow]max steps reached ({event.get('steps')})[/yellow]")
     elif etype == "error":
@@ -720,7 +761,8 @@ def _render_verified_answer(payload: dict[str, Any], verification: dict[str, Any
     """Render source facts and model inferences as visibly different blocks."""
     answer = str(payload.get("answer") or "")
     status = str(payload.get("status") or "grounded")
-    border = "green" if status == "grounded" else "yellow"
+    reviewed = (verification.get("semantic_review") or {}).get("status") == "passed"
+    border = "green" if status == "grounded" and reviewed else "yellow"
     title = "Answer" if status == "grounded" else "Evidence boundary"
     console.print(Panel(Text(answer), title=title, border_style=border))
 
@@ -753,7 +795,7 @@ def _render_verified_answer(payload: dict[str, Any], verification: dict[str, Any
         console.print(
             Panel(
                 _citations_text(citations),
-                title="Verified citations",
+                title="引用来源 / Citation sources",
                 border_style="blue",
             )
         )
@@ -761,6 +803,17 @@ def _render_verified_answer(payload: dict[str, Any], verification: dict[str, Any
         console.print(
             f"[yellow]verification:[/yellow] refused ({verification.get('reason', 'unknown')})"
         )
+    elif verification:
+        semantic = verification.get("semantic_review") or {}
+        semantic_status = semantic.get("status") if isinstance(semantic, dict) else None
+        labels = {"passed": "AI 语义复核通过", "disabled": "AI 语义复核未启用",
+                  "not_required": "运行时生成证据边界说明"}
+        semantic_label = labels.get(str(semantic_status), "未记录通过的 AI 语义复核")
+        structure_passed = verification.get("structure") == "passed" or verification.get(
+            "status"
+        ) in {"verified", "structure_verified", "insufficient_evidence"}
+        structure_label = "答案结构与引用来源校验通过" if structure_passed else "答案结构校验未通过"
+        console.print(Text(f"校验: {structure_label} · {semantic_label}", style="dim"))
 
 
 def _claims_text(claims: list[dict[str, Any]]) -> Text:

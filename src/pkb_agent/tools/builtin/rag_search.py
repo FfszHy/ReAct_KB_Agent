@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from pkb_agent.rag.provenance import source_provenance
 from pkb_agent.tools.base import BaseTool, ToolContext, ToolParam
 from pkb_agent.tools.result import ToolResult
 
@@ -60,6 +61,20 @@ class RagSearchTool(BaseTool):
                 }
             )
 
+        provenance: dict[str, dict[str, str]] = {}
+        provenance_status = "unavailable"
+        chunks_repo = ctx.repositories.get("chunks")
+        lookup = getattr(chunks_repo, "get_document_provenance", None)
+        if lookup is not None:
+            try:
+                provenance = await asyncio.to_thread(
+                    lookup, list({hit.document_id for hit in hits if hit.document_id})
+                )
+                provenance_status = "retrieved"
+            except Exception:
+                # Source lookup is enrichment: do not discard valid search
+                # results when the separate metadata request is unavailable.
+                pass
         results = []
         for i, h in enumerate(hits):
             preview = h.content
@@ -72,6 +87,7 @@ class RagSearchTool(BaseTool):
                     "document_id": h.document_id,
                     "title": h.doc_title,
                     "source_uri": h.source_uri,
+                    "provenance": source_provenance(provenance.get(h.document_id)),
                     "chunk_index": h.chunk_index,
                     "score": round(h.score, 4),
                     "vector_score": round(h.vector_score, 4),
@@ -80,7 +96,10 @@ class RagSearchTool(BaseTool):
                 }
             )
         return ToolResult.success(
-            {"query": queries[0], "queries": queries, "count": len(results), "results": results}
+            {
+                "query": queries[0], "queries": queries, "count": len(results),
+                "results": results, "provenance_status": provenance_status,
+            }
         )
 
 

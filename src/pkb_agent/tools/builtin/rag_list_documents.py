@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any
 
+from pkb_agent.agent.verification import extract_evidence
 from pkb_agent.tools.base import BaseTool, ToolContext, ToolParam
 from pkb_agent.tools.result import ToolResult
 
@@ -58,23 +60,78 @@ class RagListDocumentsTool(BaseTool):
         except Exception as exc:
             return ToolResult.failure(f"rag_list_documents failed: {exc}")
 
-        items = [item for row in rows if (item := _serialize_document(row)) is not None]
-        # A full page can still be the final page, so the caller follows the
-        # cursor once more before concluding that the catalog is exhausted.
-        next_offset = offset + len(rows) if len(rows) == limit else None
-        return ToolResult.success(
-            {
-                "count": len(items),
-                "offset": offset,
-                "next_offset": next_offset,
-                "items": items,
-                "note": (
-                    "no documents found for this user"
-                    if not items and offset == 0
-                    else "document catalog page"
-                ),
-            }
-        )
+        rows = rows or []
+        budget = int(getattr(ctx.settings, "agent_tool_result_max_chars", 6000))
+        items: list[dict[str, Any]] = []
+        consumed = 0
+        for row in rows:
+            item = _serialize_document(row)
+            if item is None:
+                consumed += 1
+                continue
+            next_offset = _next_offset(offset, consumed + 1, len(rows), limit)
+            candidate = _page([*items, item], offset, next_offset)
+            if _observation_size(candidate, ctx) > budget:
+                if items:
+                    break
+                # Even one unusually long title/URI can exceed the observation
+                # budget. Preserve its document ID, mark shortened metadata,
+                # and advance the cursor instead of repeating this row forever.
+                item = _fit_single_item(item, offset, next_offset, budget, ctx)
+                if item is None:
+                    return ToolResult.failure(
+                        "catalog observation budget is too small for one document ID; "
+                        "increase agent_tool_result_max_chars before retrying"
+                    )
+            items.append(item)
+            consumed += 1
+        page = _page(items, offset, _next_offset(offset, consumed, len(rows), limit))
+        return ToolResult.success(page, truncated=page["truncated"])
+
+
+def _next_offset(offset: int, consumed: int, fetched: int, limit: int) -> int | None:
+    # Continue from rows actually represented on this page, not all rows fetched.
+    # A full storage page needs one more query to establish end-of-catalog.
+    return offset + consumed if consumed < fetched or fetched == limit else None
+
+
+def _page(items: list[dict[str, Any]], offset: int, next_offset: int | None) -> dict[str, Any]:
+    return {
+        "count": len(items),
+        "offset": offset,
+        "next_offset": next_offset,
+        "items": items,
+        "truncated": any(item.get("truncated", False) for item in items),
+        "note": "no documents found for this user" if not items and offset == 0 else "document catalog page",
+    }
+
+
+def _observation_size(page: dict[str, Any], ctx: ToolContext) -> int:
+    # Account for the exact citation descriptor prepended by the runtime too;
+    # budgeting the items alone still leaves a truncated, invalid JSON result.
+    evidence = extract_evidence("rag_list_documents", page, settings=ctx.settings)
+    payload = {"citation_evidence": [item.to_prompt_dict() for item in evidence], **page}
+    return len(json.dumps(payload, ensure_ascii=False, default=str, indent=2))
+
+
+def _fit_single_item(
+    item: dict[str, Any], offset: int, next_offset: int | None, budget: int, ctx: ToolContext
+) -> dict[str, Any] | None:
+    shortened = {**item, "truncated": True}
+    while _observation_size(_page([shortened], offset, next_offset), ctx) > budget:
+        fields = [
+            key for key, value in shortened.items()
+            if key != "document_id" and isinstance(value, str)
+        ]
+        if not fields:
+            return None
+        key = max(fields, key=lambda name: len(shortened[name]))
+        value = shortened[key]
+        if len(value) <= 4:
+            del shortened[key]
+        else:
+            shortened[key] = value[:len(value) // 2] + "…"
+    return shortened
 
 
 def _page_value(
