@@ -9,9 +9,11 @@ or network access from the runtime itself.
 
 [![Watch the PKB-Agent demo](docs/media/demo-poster.jpg)](https://raw.githubusercontent.com/FfszHy/ReAct_KB_Agent/main/docs/media/demo.mp4)
 
-**[Watch the video / 观看演示视频](https://raw.githubusercontent.com/FfszHy/ReAct_KB_Agent/main/docs/media/demo.mp4)**
+**[Download and watch / 下载观看演示视频](https://raw.githubusercontent.com/FfszHy/ReAct_KB_Agent/main/docs/media/demo.mp4)**
 · [Chinese captions](docs/media/demo.zh-CN.srt)
 · [Recording details](docs/media/README.md)
+
+Click the cover or link to download the MP4 (9.2 MiB) and watch it locally.
 
 Recorded on **2026-10-05**: about **4 min 36 sec**, real CLI output at its
 original speed, with Chinese explanatory captions and no audio. The five

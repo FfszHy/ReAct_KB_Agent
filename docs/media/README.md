@@ -1,8 +1,10 @@
 # Real CLI demo / 真实 CLI 演示
 
-[Watch the video / 观看视频](https://raw.githubusercontent.com/FfszHy/ReAct_KB_Agent/main/docs/media/demo.mp4)
+[Download and watch / 下载观看视频](https://raw.githubusercontent.com/FfszHy/ReAct_KB_Agent/main/docs/media/demo.mp4)
 · [Chinese captions](demo.zh-CN.srt)
 · [Provenance and verification](provenance.json)
+
+The link downloads the MP4 (9.2 MiB) for local playback.
 
 Recorded on 2026-10-05 (Asia/Shanghai). About 4 min 36 sec, 2560×1600 H.264,
 no audio. Captions describe visible actions and outcomes; they are editorial
