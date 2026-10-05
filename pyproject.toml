@@ -50,7 +50,7 @@ pkb-agent = "pkb_agent.app.cli:app"
 packages = ["src/pkb_agent"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src/pkb_agent", "config", "supabase", "README.md"]
+include = ["src/pkb_agent", "config", "supabase", "README.md", "LICENSE"]
 
 [tool.ruff]
 line-length = 100

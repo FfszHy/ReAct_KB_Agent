@@ -1,6 +1,8 @@
-# ReAct_KB_Agent（pkb-agent）项目技术总结
+# ReAct_KB_Agent（pkb-agent）项目技术总结（历史快照）
 
-> 用途：撰写简历中「个人项目 / 项目经历」部分的事实来源。所有数据均来自本仓库代码与已冻结的评测产物，可直接引用；标注「实测」的指标来自 `data/evals/fastapi-0.115/results/` 下的真实运行记录。
+> 用途：保留此前用于简历的技术总结与评测口径。实现说明、代码规模及 2026-08/09 的 Agent 评测描述的是当时版本，不能作为当前源码的完整说明。FastAPI 检索记录位于公开的 `data/evals/fastapi-0.115/results/`；多域 Agent 记录与 AI 审阅产物位于本地 `artifacts/`，未随公开仓库发布，因此下文对应历史指标无法仅凭此公开仓库独立复核。
+
+2026-10-04 已移除仓库内的 Next.js 工作台，保留 Python 运行时、CLI 与 HTTP/SSE API，由独立 GUI 连接。当前功能、正文与声明覆盖规则、AI 语义复核限制以 [README](../README.md) 和 [修复记录](agent-quality-fixes.md) 为准；当前演示见 [2026-10-05 实录说明](media/README.md)。下文保留历史成功和失败结果，不将后续修复追认成旧版本已通过验证。
 
 ---
 
@@ -27,7 +29,7 @@
 
 ---
 
-## 三、整体架构
+## 三、整体架构（历史工作台版本）
 
 ```
 CLI (Typer+Rich) / Next.js 工作台
@@ -65,7 +67,7 @@ CLI (Typer+Rich) / Next.js 工作台
 
 这条约束让「Agent 的行为边界」是代码级可审计的，而不是靠提示词自觉。
 
-**代码规模**：`src/pkb_agent` 约 10,800 行 Python（13 个功能子模块），测试 25 个文件约 4,300 行；数据库迁移 9 个 SQL 文件；前端 Next.js 工作台 8 个组件。
+**历史代码规模**：`src/pkb_agent` 约 10,800 行 Python（13 个功能子模块），测试 25 个文件约 4,300 行；数据库迁移 9 个 SQL 文件；当时的前端 Next.js 工作台 8 个组件。此处未按当前源码重新计数；该前端现已移除。
 
 ---
 
@@ -167,12 +169,14 @@ CLI (Typer+Rich) / Next.js 工作台
 
 ---
 
-## 五、可视化工作台（第二形态）
+## 五、可视化工作台（历史实现）
+
+以下描述当时的前后端工作台。当前仓库保留后端 API，Next.js 前端已移除，界面由独立 GUI 提供。
 
 - **后端**：FastAPI + **SSE** 边界层。`RunSession` 维护内存重放日志（带单调 sequence、上限 500 条）+ 多订阅者 fan-out；SSE 带 `retry`、15s keep-alive 心跳、断连检测；事件含 `start / plan / tool_call / tool_result / answer / answer_verification_failed / run_finished` 等类型。
 - **人工审批闭环**：`ApprovalBroker` 让 `ask` 类工具（`web_fetch` / `memory_write`）在浏览器中显式批准，超时 300s；未批准则记 `ToolPermissionDenied` 并安全拒答。这是「人类在环（human-in-the-loop）」的落地形式，而不是提示词里写一句"请谨慎"。
 - **接口**：文档上传（≤25MB，PDF/txt）→ 入库 → 提问 → SSE 订阅运行 → 引用卡片可点击跳回原始 chunk → 展开检索候选 / 重放 Trace 时间线 / 审批受保护工具 / 查看端到端耗时、token 用量、成本与工具成功率。
-- **前端**：Next.js 工作台，把「证据优先」的一条链路做透（AnswerPanel / RetrievalPanel / SourceInspector / TraceTimeline / ApprovalDialog / RunMetrics / KnowledgeSidebar / RunDetails）。
+- **历史前端**：Next.js 工作台，将答案、检索、来源、追踪、审批与指标串联（AnswerPanel / RetrievalPanel / SourceInspector / TraceTimeline / ApprovalDialog / RunMetrics / KnowledgeSidebar / RunDetails）；当前仓库已移除该前端。
 
 ---
 
@@ -215,7 +219,7 @@ CLI (Typer+Rich) / Next.js 工作台
 - 查询重写 + 混合把 MRR@6 推到 1.000、NDCG@6 到 0.988（delta +0.138，CI [0.031, 0.273]），代价是约 1.5× p95 延迟与 ¥0.000436/题——因此**非 LLM 的「向量+归一化 FTS」被保留为默认**，重写作为可选增强。
 - 消融中暴露的失败案例被原样保留（如 `rewrite_rrf` 在 `test-body-01`、`test-deploy-01` 上出现 loss），并在报告中展示。纯向量路保留 2 次瞬时 Supabase RPC 超时，**没有隐藏**。
 
-### 6.4 实测结果 B：多域基准端到端 Agent 评测（tech-multidomain-v1.1，主结果）
+### 6.4 历史实测结果 B：多域基准端到端 Agent 评测（tech-multidomain-v1.1）
 
 **运行配置**（`artifacts/evals/tech-multidomain-v1.1/20260813T080938Z/run.json`）：`kb_only` profile（只暴露 `rag_list_documents / rag_search / rag_read`，按标签排除 8 道受保护抓取用例 → **112 题**）、test 冻结集、1 次重复、`deepseek-v4-flash` + `qwen3.7-text-embedding`、`top_k=6`、关闭 DB 权限覆盖。**112 题全部为真实 Agent 端到端运行**（非检索占位）。
 
@@ -273,9 +277,9 @@ CLI (Typer+Rich) / Next.js 工作台
 | `20260813T024003Z` | 100.0% | 75.0% | 77.3% | 80.7% | 100.0% | 0.0% | 39.9 s / 90.4 s |
 | `20260813T080938Z`（最新，含复核） | 97.7% | 75.0% | 81.8% | 84.1% | 97.0% | 0.9% | 49.8 s / 216.1 s |
 
-> 引用建议：**报最新一次（含复核）**；若要强调稳定性，可说明「同配置 3 次重复运行中 grounded 率 95.5%–100%、执行失败率 0%–4.5%」，而不是把单次最优数字当成稳定能力。
+> 历史引用口径：该批最后一次运行含复核；若提及稳定性，须同时说明「同配置 3 次重复运行中 grounded 率 95.5%–100%、执行失败率 0%–4.5%」。这些记录没有按当前源码重新运行，不能把单次最优数字当成当前版本的稳定能力。
 
-### 6.5 实测结果 C：权限链路与 120 题全量覆盖
+### 6.5 历史实测结果 C：权限链路与 120 题全量覆盖
 
 > ⚠️ 本节修正一个我此前的错误判断：`permission` profile **已经在 v1.1 上跑过**（2026-09-14），并额外产出了一个 120 题合并覆盖套件。
 
@@ -334,7 +338,7 @@ CLI (Typer+Rich) / Next.js 工作台
 | Embedding | DashScope 原生 SDK，`qwen3.7-text-embedding`，1536 维，batch=20 |
 | Web 搜索 | Tavily / Serper / Bing（环境变量切换） |
 | 后端服务 | FastAPI + SSE + uvicorn |
-| 前端 | Next.js + TypeScript |
+| 历史前端（已移除） | Next.js + TypeScript；当前使用独立 GUI 连接 API |
 | CLI | Typer + Rich |
 | 文档解析 | pypdf / BeautifulSoup + lxml |
 | 分词统计 | tiktoken（cl100k_base） |
@@ -390,11 +394,11 @@ CLI (Typer+Rich) / Next.js 工作台
 
 - **5 策略检索消融只在 FastAPI 切片（10 篇文档、30 题）上跑过完整对比**；多域基准 v1.1 的三次运行都是 Agent 端到端评测（`strategies=[]`），**没有在 v1.1 语料上重跑全量检索消融**。结论不宣称可泛化到任意语料。
 - v1.1 的 120 题覆盖是**两次不同时间运行的合并**（112 题 kb_only @2026-08-13 + 8 题 permission @2026-09-14），**不是同一轮 120 题同时重跑**；哈希/模型名/corpus revision 相同只说明记录到的配置一致，不证明服务商后端与环境变量完全一致。
-- **`web_approved`（批准后真正放行抓取）这条链路有意未覆盖**（它需要真实外网访问，当前沙箱环境不具备）。因此权限测试只覆盖「未确认时拒绝抓取」，**不代表已测通过允许访问、其他授权模式或全部安全边界**——简历/面试中不要暗示已覆盖放行路径。
+- **这批历史评测未覆盖 `web_approved`（批准后真正放行抓取）链路**，当时受真实外网访问条件限制。因此该批权限测试只覆盖「未确认时拒绝抓取」，**不代表已测通过允许访问、其他授权模式或全部安全边界**。2026-10-05 实录第 4 段输入 `y` 授权抓取，是后续单次演示，不能回填历史评测或推广成全部安全边界已验证。
 - 首次权限运行 `20260914T064118Z` 因沙箱 DNS/网络失败（8/8 DeepSeek 连接失败）被显式排除；保留原始记录供诊断，未计入正式结果。
 - **语义指标来自一次 AI 复核（Codex），不是人工复核，也没有第二位独立审核者**；且因原始 records 未保存检索 chunk 正文，复核以完整固定版本源文档为比对基准，比 Agent 实际看到的片段更宽松——**不能表述为 chunk 级精确引用审核通过**。14 条引用判定与 5 条一致性判定为 unknown，不计为通过。
 - 语义对齐 ≠ 语义蕴含：报告里的 `citation_alignment_precision` 只表示「引用落到了标注的相关文档」，不是「这句话被文档证明」。
-- 复核发现多处事实错误**只出现在 `answer` 正文而 `claims` 准确**，说明当前 verifier 通过不等于正文无额外错误——这是已知的校验盲区。
+- 历史复核发现多处事实错误**只出现在 `answer` 正文而 `claims` 准确**，说明当时 verifier 通过不等于正文无额外错误。后续已增加正文与声明逐字覆盖规则；它只验证两处文字一致，AI 语义复核仍可能漏判，见 [修复记录](agent-quality-fixes.md)。
 - 三次同配置运行的 grounded 率在 95.5%–100%、执行失败率 0%–4.5% 之间波动，**单次数字不代表稳定能力**；p95 延迟（90s–216s）波动同样较大。
 - 成本是「已知 LLM usage」的计算，不含 embedding 提供方账单，**不是完整发票**。
-- 前端工作台只在本地双进程（uvicorn:8000 + next:3000）开发模式下运行，未做生产部署与鉴权加固；数据隔离依赖 Supabase RLS 策略 + user_id 维度，尚未接入真正的多租户认证。
+- 历史前端工作台只在本地双进程（uvicorn:8000 + next:3000）开发模式下运行，未做生产部署与鉴权加固，现已移除。当前后端的数据隔离仍依赖 Supabase RLS 策略 + user_id 维度，尚未接入真正的多租户认证。

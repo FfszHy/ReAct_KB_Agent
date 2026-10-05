@@ -5,6 +5,27 @@ reasons in a Thought → Action → Observation loop and interacts with the worl
 **only** through a permissioned, traced tool layer. There is no direct database
 or network access from the runtime itself.
 
+## Demo: real CLI recording
+
+[![Watch the PKB-Agent demo](docs/media/demo-poster.jpg)](https://raw.githubusercontent.com/FfszHy/ReAct_KB_Agent/main/docs/media/demo.mp4)
+
+**[Watch the video / 观看演示视频](https://raw.githubusercontent.com/FfszHy/ReAct_KB_Agent/main/docs/media/demo.mp4)**
+· [Chinese captions](docs/media/demo.zh-CN.srt)
+· [Recording details](docs/media/README.md)
+
+Recorded on **2026-10-05**: about **4 min 36 sec**, real CLI output at its
+original speed, with Chinese explanatory captions and no audio. The five
+scenarios show catalog pagination, cross-document answers with citations,
+insufficient evidence for a measured p99, user-approved web fetching, and
+autonomous ConfigMap retrieval. The web and ConfigMap cases both preserve a
+failed AI review, a repair turn, and the final answer. The web request was
+approved with `y`; this recording does not demonstrate denied authorization.
+
+These are observed examples, not a general accuracy score. AI semantic review
+can miss errors, and the ConfigMap example did not access or repair a live
+cluster. See the [recording guide](docs/ghostty-recording.md) to run the same
+questions yourself.
+
 ## Evaluation-driven RAG optimization
 
 This is not a feature-only RAG demo. The repository contains reproducible
@@ -103,7 +124,7 @@ dashboard, an SVG comparison chart, and—when the agent is evaluated—a blank
 | Vector | `pgvector` (similarity via `<=>`, `<#>`, `<->`) |
 | Lexical | Postgres Full Text Search (`tsvector`, `ts_rank`) |
 | DB client | `supabase-py` (`rpc()` for search functions) |
-| Embeddings | External OpenAI-compatible `/embeddings` endpoint (configurable) |
+| Embeddings | DashScope native `TextEmbedding` SDK (configurable model and dimensions) |
 | Web search | Tavily / Serper / Bing (selectable via `WEB_SEARCH_PROVIDER`) |
 | CLI | Typer + Rich |
 | API | FastAPI + HTTP/SSE |
@@ -113,7 +134,7 @@ dashboard, an SVG comparison chart, and—when the agent is evaluated—a blank
 ```
 CLI User → Typer CLI → DeepSeek ReAct Runtime → Tool Registry + Permission Manager
                                                               ↓
-   Tools: rag_search, rag_read, web_search, web_fetch,
+   Tools: rag_list_documents, rag_search, rag_read, web_search, web_fetch,
           memory_search, memory_write, calculator, now
                                                               ↓
                          Repositories → Supabase Postgres
@@ -333,4 +354,6 @@ must not be mixed.
 
 ## License
 
-MIT
+[MIT](LICENSE). Upstream documentation referenced by the benchmark manifests
+retains its own license; the manifests pin URLs and hashes and do not vendor
+the source corpus.

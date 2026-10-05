@@ -25,9 +25,9 @@ pkb-agent eval run data/evals/fastapi-0.115 --split dev --repetitions 3
 pkb-agent eval run data/evals/fastapi-0.115 --split test --repetitions 3 --with-agent
 ```
 
-The second command creates raw JSONL, an editable human-audit sheet, a static
-HTML dashboard, a Markdown report, and an SVG comparison chart under
-`artifacts/evals/`. Retrieval reports include 95% bootstrap intervals over
+The `eval run` commands create raw JSONL, a static HTML dashboard, a Markdown
+report, and an SVG comparison chart under `artifacts/evals/`. Agent runs also
+create an editable human-audit sheet. Retrieval reports include 95% bootstrap intervals over
 unique answerable questions plus NDCG@K per-question win/loss/tie against
 Vector; repetitions are averaged inside a question before comparison. Complete
 the audit sheet and re-score it with `pkb-agent eval report` before claiming

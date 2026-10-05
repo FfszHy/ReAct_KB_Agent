@@ -1,18 +1,18 @@
 # Ghostty 真实录屏
 
-本次改为直接录下 Ghostty 窗口中的真实运行。已有的排版回放 MP4 不作为这一版交付。当前电脑控制工具禁止访问 Ghostty，因此录屏启动、窗口操作和键盘输入需要由用户完成。
+本说明用于直接录下 Ghostty 窗口中的真实运行。2026-10-05 的中文字幕实录约 4 分 36 秒，见 [视频与观看说明](media/README.md)。这份实录保留真实运行速度，第 4 段实际输入 `y` 授权抓取，第 4、5 段保留了真实的复核与重写过程。下方的 `n` 是复现权限拒绝场景的建议，与这次实录的实际选择不同。
 
 ## 开录
 
 1. 打开 Ghostty，放大到适合阅读的窗口与字号。建议深色背景、清楚的文字，不为凑时长加入空等待。
 2. 按 `Shift + Command + 5`，选择“录制所选部分”，框住 Ghostty 窗口；麦克风选“无”，保存位置选项目的 `artifacts/ghostty-recording/` 或桌面，点击“录制”。
-3. 在 Ghostty 运行下面这一条命令。脚本自动进入项目目录，所有请求都使用 Conda 环境 `pkb-agent`。
+3. 在仓库根目录的 Ghostty 终端运行下面这一条命令。脚本自动进入项目目录，所有请求都使用 Conda 环境 `pkb-agent`。
 
 ```bash
-bash /Users/ffsz/workspace/code/ReAct_KB_Agent/scripts/demo_ghostty.sh
+bash scripts/demo_ghostty.sh
 ```
 
-每段先显示将执行的命令，你按回车后才实际请求模型；完成后继续等待回车，供你讲解与滚动查看。网页抓取出现 `[y/N]` 时，**亲自输入 `n` 并回车**。脚本没有自动拒绝或批准工具，也不会改写、过滤或回放 Agent 输出。
+每段先显示将执行的命令，你按回车后才实际请求模型；完成后继续等待回车，供你讲解与滚动查看。若要展示权限拒绝，网页抓取出现 `[y/N]` 时，**亲自输入 `n` 并回车**；输入 `y` 则授权该次抓取。脚本没有自动拒绝或批准工具，也不会改写、过滤或回放 Agent 输出。
 
 可以一次录完五段，也可以在命令末尾加 `1`、`2`、`3`、`4`、`5` 单独运行某段。已录好前四段时，只补录第 5 段即可。
 
@@ -25,7 +25,7 @@ bash /Users/ffsz/workspace/code/ReAct_KB_Agent/scripts/demo_ghostty.sh
 | 1 | 目录工具分页，统计四个领域的资料 | 目录统计结果约 8 秒 |
 | 2 | FastAPI 响应模型优先级与 Pydantic 必填规则 | 向上滚到答案，再缓慢下滚到事实、推断与引用，各约 10 秒 |
 | 3 | 请求知识库没有的生产压测 p99 | 查看此次是否如实说明缺少证据，约 8 秒 |
-| 4 | `web_fetch` 请求确认与手动拒绝 | 确认提示停 3–5 秒，再输入 n；最终回答停约 10 秒 |
+| 4 | `web_fetch` 请求确认；可选择拒绝或授权 | 确认提示停 3–5 秒，演示拒绝时输入 n；2026-10-05 实录输入 y 授权 |
 | 5 | ConfigMap 假设案例：只给目标，让 Agent 自主选择查证动作 | 保留搜索到具体 ID 后的读取动作，以及最终有条件的判断；答案仍需核验，见下方预检限制 |
 
 耗时、工具序列和答案会随检索路径、模型服务与复核变化，单段可能需要数分钟。建议分段录制，不保证五段在固定时长内结束。脚本的“命令已返回”不表示语义正确。遇到失败时保留画面，录后按事实审阅。
@@ -33,7 +33,7 @@ bash /Users/ffsz/workspace/code/ReAct_KB_Agent/scripts/demo_ghostty.sh
 ## 新增：自主 ReAct 演示
 
 ```bash
-bash /Users/ffsz/workspace/code/ReAct_KB_Agent/scripts/demo_ghostty.sh 5
+bash scripts/demo_ghostty.sh 5
 ```
 
 完整问题保存在 [react-configmap.txt](demo-prompts/react-configmap.txt)。它只给出一个假设问题、交付目标与知识库范围，不指定工具、文档和查证顺序。相比前面的目录统计和指定页面抓取，更适合观察模型自主选择下一步。
@@ -44,14 +44,14 @@ bash /Users/ffsz/workspace/code/ReAct_KB_Agent/scripts/demo_ghostty.sh 5
 
 **修复前的预检发现了自主行动，也发现了答案局限。** 两次真实 CLI 预检都出现了从搜索结果选择具体 ID 再读取的行为。但较宽的问题给出了过强的唯一修复方案；收窄后的问题仍有“只有卷挂载会自动更新”的绝对化概括，以及未经本轮相关文档支持的 Deployment 解释。这些历史结果保留原样，不能把它们包装成完全正确的自主故障诊断，也不能将新增运行时检查视为对旧答案的追认。详见 [预检审阅](react-demo-review.md)，记录位于 `artifacts/ghostty-recording/react-configmap-preflight*.json`。
 
-这些是 CLI 文字预检，不是 Ghostty 录屏；没有访问真实集群或执行修复。录制时应保留真实输出，描述为“自主检索与证据驱动判断”，并按本次实际答案说明局限。
+这些是 CLI 文字预检，不是 Ghostty 录屏；没有访问真实集群或执行修复。预检 JSON 属于未随公开仓库发布的历史本地记录。录制时应保留真实输出，描述为“自主检索与证据驱动判断”，并按本次实际答案说明局限。
 
 ## 开录前可选检查
 
 本轮工程修复、实际预检结果和仍存在的语义问题见 [Agent 质量修复记录](agent-quality-fixes.md)。正文现在必须与带引用的声明逐字对应，AI 复核放行还必须给出逐条原文证据。复杂排障的“最小方案”、唯一根因等推断仍有漏检记录，现有五段应讲解为自主检索、证据核验和边界处理；不能凭这段视频证明通用故障诊断可靠性。
 
 ```bash
-bash /Users/ffsz/workspace/code/ReAct_KB_Agent/scripts/demo_ghostty.sh --check
+bash scripts/demo_ghostty.sh --check
 ```
 
 这个检查只验证本地数据集结构，不执行模型问答。用 `--list` 可预览五条完整命令。模型与 Supabase 连通性可另运行 `conda run -n pkb-agent pkb-agent doctor`。
@@ -60,4 +60,4 @@ bash /Users/ffsz/workspace/code/ReAct_KB_Agent/scripts/demo_ghostty.sh --check
 
 ## 录完
 
-用菜单栏停止按钮或 `Control + Command + Esc` 停止录制。把生成 `.mov` 的本地路径发给我，我再从这份真实录屏做裁边、首尾修剪和需要的中文字幕，并保留原始录像。字幕会根据这次真实输出制作，不套用上次生成的答案或时间轴。
+用菜单栏停止按钮或 `Control + Command + Esc` 停止录制。保留原始 `.mov`，再按需要做裁边、首尾修剪和中文字幕。字幕应根据这次真实输出制作，不套用之前生成的答案或时间轴。

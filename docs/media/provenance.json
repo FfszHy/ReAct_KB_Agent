@@ -1,0 +1,30 @@
+{
+  "recorded_date": "2026-10-05",
+  "timezone": "Asia/Shanghai",
+  "source_sha256": "74f6bb4fed818026322d4d8ddeaffad7828ef028b6d68257d1c0f1c8b22e0b59",
+  "published_video_sha256": "84b658682e46c30b7002de7d8e3e829ef227544af6b666e30432735c4d3c6dbc",
+  "published_video_bytes": 9630211,
+  "source_duration_seconds": 275.581667,
+  "published_container_duration_seconds": 275.582,
+  "resolution": [
+    2560,
+    1600
+  ],
+  "codec": "h264",
+  "source_frames": 802,
+  "published_frames": 802,
+  "max_frame_pts_difference_seconds": 0.0,
+  "playback_speed": 1.0,
+  "full_file_decode": "passed",
+  "captions": "Chinese editorial descriptions, no audio transcript",
+  "review": "AI review of visible source and output frames; not human certification",
+  "edits": [
+    "Crop external black margin and window title bar",
+    "Add chapter labels and captions outside terminal content",
+    "Re-encode H.264 CRF 26 for publication"
+  ],
+  "notable_observed_events": [
+    "Case 4: user y authorization, successful web fetch, unsupported HTTP 200 statement rejected, repair, second review passed",
+    "Case 5: overly exclusive volume update statement rejected, repair, second review passed"
+  ]
+}
